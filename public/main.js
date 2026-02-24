@@ -598,8 +598,13 @@ document.addEventListener('keydown', (e) => {
 
 function formatModelName(model) {
   if (!model) return 'Unknown';
-  // claude-opus-4-5-20251101 -> Opus 4.5
-  if (model.includes('opus')) return 'Opus 4.5';
+  // claude-opus-4-6-20260... -> Opus 4.6
+  const match = model.match(/(opus|sonnet|haiku)-(\d+)-(\d+)/);
+  if (match) {
+    const name = match[1].charAt(0).toUpperCase() + match[1].slice(1);
+    return `${name} ${match[2]}.${match[3]}`;
+  }
+  if (model.includes('opus')) return 'Opus';
   if (model.includes('sonnet')) return 'Sonnet';
   if (model.includes('haiku')) return 'Haiku';
   return model.split('-').slice(1, 3).join(' ');

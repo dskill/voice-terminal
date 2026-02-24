@@ -222,9 +222,9 @@ function handleClaudeMessage(msg) {
 }
 
 function extractSpokenSummary(response) {
-  const match = response.match(/\[SPOKEN:\s*([\s\S]*?)\]/i);
-  if (match) {
-    return match[1].trim();
+  const matches = [...response.matchAll(/\[SPOKEN:\s*([\s\S]*?)\]/gi)];
+  if (matches.length > 0) {
+    return matches[matches.length - 1][1].trim();
   }
   // Fallback: use last paragraph
   const paragraphs = response.trim().split('\n\n');
