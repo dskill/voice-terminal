@@ -54,6 +54,9 @@ startButton.addEventListener('click', async () => {
   startButton.disabled = true;
   loadingLog.innerHTML = '';
 
+  // Unlock TTS early on user gesture (iOS requirement)
+  unlockTTS();
+
   try {
     log('Checking browser capabilities...');
     log(`User Agent: ${navigator.userAgent.substring(0, 80)}...`);
@@ -210,6 +213,20 @@ async function handleServerMessage(data) {
 // Text-to-Speech (Browser Native)
 // ============================================
 
+let ttsUnlocked = false;
+
+// iOS requires TTS to be triggered by user gesture first
+function unlockTTS() {
+  if (ttsUnlocked || !('speechSynthesis' in window)) return;
+
+  // Speak empty utterance to unlock
+  const utterance = new SpeechSynthesisUtterance('');
+  utterance.volume = 0;
+  speechSynthesis.speak(utterance);
+  ttsUnlocked = true;
+  console.log('TTS: Unlocked');
+}
+
 function synthesizeSpeech(text) {
   return new Promise((resolve) => {
     if (!('speechSynthesis' in window)) {
@@ -218,14 +235,17 @@ function synthesizeSpeech(text) {
       return;
     }
 
-    // Cancel any pending speech (important for Safari)
+    // Cancel any pending speech
     speechSynthesis.cancel();
 
     console.log('TTS: Speaking:', text);
+    console.log('TTS: voices available:', speechSynthesis.getVoices().length);
+
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = 'en-US';
     utterance.rate = 1.0;
     utterance.pitch = 1.0;
+    utterance.volume = 1.0;
 
     let resolved = false;
     let pollInterval = null;
@@ -239,14 +259,14 @@ function synthesizeSpeech(text) {
       }
     };
 
+    utterance.onstart = () => console.log('TTS: Started speaking');
     utterance.onend = () => done('onend');
     utterance.onerror = (e) => {
-      console.log('TTS: Error -', e.error);
+      console.log('TTS: Error -', e.error || e);
       done('error');
     };
 
-    // Safari workaround: poll speechSynthesis.speaking
-    // because onend doesn't always fire
+    // Poll speechSynthesis.speaking as fallback
     pollInterval = setInterval(() => {
       if (!speechSynthesis.speaking && !speechSynthesis.pending) {
         done('poll');
@@ -258,8 +278,9 @@ function synthesizeSpeech(text) {
     const timeout = Math.max(5000, wordCount * 200 + 3000);
     setTimeout(() => done('timeout'), timeout);
 
-    // iOS Safari requires a small delay after cancel
+    // Small delay after cancel
     setTimeout(() => {
+      console.log('TTS: Calling speak()');
       speechSynthesis.speak(utterance);
     }, 100);
   });
@@ -349,6 +370,9 @@ async function startRecording() {
     liveTranscript.textContent = 'Start Claude session first';
     return;
   }
+
+  // Unlock TTS on user gesture (iOS requirement)
+  unlockTTS();
 
   if (!browserRecognition) {
     initBrowserSpeechRecognition();
