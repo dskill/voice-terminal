@@ -32,9 +32,9 @@ const wss = new WebSocketServer({ server });
 
 let claudeProcess = null;
 let claudeReady = false;
-let currentRequestId = null;
 let responseBuffer = '';
 let connectedClients = new Set();
+let conversationHistory = []; // Store conversation for reconnecting clients
 
 function startClaudeSession() {
   if (claudeProcess) {
@@ -42,15 +42,20 @@ function startClaudeSession() {
     return;
   }
 
+  // Clear history when starting new session
+  conversationHistory = [];
+
   console.log('Starting Claude session with stream-json mode...');
 
-  claudeProcess = spawn('claude', [
+  const args = [
     '--print',
     '--output-format', 'stream-json',
     '--input-format', 'stream-json',
     '--verbose',
     '--dangerously-skip-permissions'
-  ], {
+  ];
+
+  claudeProcess = spawn('claude', args, {
     cwd: process.env.HOME,
     env: { ...process.env },
     stdio: ['pipe', 'pipe', 'pipe']
@@ -101,13 +106,11 @@ function stopClaudeSession() {
   claudeProcess.kill('SIGTERM');
   claudeProcess = null;
   claudeReady = false;
+  conversationHistory = [];
 }
 
 function handleClaudeMessage(msg) {
-  // Stream-json format sends various message types
-  // See: https://docs.anthropic.com/en/docs/claude-code
-
-  console.log('Claude message:', msg.type, msg);
+  console.log('Claude message:', msg.type);
 
   if (msg.type === 'assistant') {
     // Assistant message with content
@@ -122,7 +125,6 @@ function handleClaudeMessage(msg) {
     // Streaming text delta
     if (msg.delta?.text) {
       responseBuffer += msg.delta.text;
-      // Send partial update to clients
       broadcastToClients({
         type: 'partial',
         text: msg.delta.text
@@ -135,19 +137,24 @@ function handleClaudeMessage(msg) {
 
     const spokenSummary = extractSpokenSummary(fullResponse);
 
+    // Store in history
+    conversationHistory.push({
+      type: 'assistant',
+      content: fullResponse,
+      spokenSummary,
+      timestamp: Date.now()
+    });
+
     broadcastToClients({
       type: 'response',
       fullResponse,
       spokenSummary
     });
-
-    currentRequestId = null;
   } else if (msg.type === 'error') {
     broadcastToClients({
       type: 'error',
       message: msg.error?.message || 'Unknown error'
     });
-    currentRequestId = null;
   }
 }
 
@@ -226,9 +233,23 @@ wss.on('connection', (ws) => {
           hasProcess: false
         }));
 
+      } else if (message.type === 'get-history') {
+        // Send conversation history to reconnecting client
+        ws.send(JSON.stringify({
+          type: 'history',
+          messages: conversationHistory
+        }));
+
       } else if (message.type === 'voice-command') {
         const transcript = message.transcript;
         console.log(`Voice command: "${transcript}"`);
+
+        // Store user message in history
+        conversationHistory.push({
+          type: 'user',
+          content: transcript,
+          timestamp: Date.now()
+        });
 
         if (!claudeReady) {
           ws.send(JSON.stringify({

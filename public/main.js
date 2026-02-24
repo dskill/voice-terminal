@@ -79,7 +79,7 @@ startButton.addEventListener('click', async () => {
     log('Ready!');
     setTimeout(() => {
       loadingOverlay.classList.add('hidden');
-      addMessage('status', 'Voice terminal ready. Hold the mic button to speak.');
+      addMessage('status', 'Voice terminal ready. Tap the mic button to start/stop recording.');
     }, 1000);
 
   } catch (error) {
@@ -100,6 +100,8 @@ function connectWebSocket() {
     wsStatus.className = 'status connected';
     sessionToggle.disabled = false;
     log('WebSocket connected');
+    // Request conversation history on reconnect
+    sendToServer('get-history');
   };
 
   ws.onclose = () => {
@@ -171,6 +173,21 @@ async function handleServerMessage(data) {
   switch (data.type) {
     case 'session-status':
       updateSessionUI(data.running);
+      break;
+
+    case 'history':
+      // Restore conversation history on reconnect
+      if (data.messages && data.messages.length > 0) {
+        transcriptArea.innerHTML = ''; // Clear existing messages
+        for (const msg of data.messages) {
+          if (msg.type === 'user') {
+            addMessage('user', msg.content);
+          } else if (msg.type === 'assistant') {
+            addMessage('assistant', msg.content, msg.spokenSummary);
+          }
+        }
+        addMessage('status', 'Reconnected - conversation history restored.');
+      }
       break;
 
     case 'session-ended':
@@ -398,34 +415,28 @@ function stopRecording() {
   }
 }
 
-// Event listeners
-micButton.addEventListener('mousedown', startRecording);
-micButton.addEventListener('mouseup', stopRecording);
-micButton.addEventListener('mouseleave', () => {
-  if (isRecording) stopRecording();
-});
-micButton.addEventListener('touchstart', (e) => {
-  e.preventDefault();
-  startRecording();
-});
-micButton.addEventListener('touchend', (e) => {
-  e.preventDefault();
-  stopRecording();
-});
-
-// Spacebar push-to-talk
-document.addEventListener('keydown', (e) => {
-  if (e.key === ' ' && !isRecording && !isProcessing) {
-    if (document.activeElement?.tagName === 'INPUT') return;
-    e.preventDefault();
+// Event listeners - tap to toggle recording
+function toggleRecording() {
+  if (isProcessing) return;
+  if (isRecording) {
+    stopRecording();
+  } else {
     startRecording();
   }
+}
+
+micButton.addEventListener('click', toggleRecording);
+micButton.addEventListener('touchend', (e) => {
+  e.preventDefault();
+  toggleRecording();
 });
 
-document.addEventListener('keyup', (e) => {
-  if (e.key === ' ' && isRecording) {
+// Spacebar tap-to-toggle
+document.addEventListener('keydown', (e) => {
+  if (e.key === ' ' && !isProcessing) {
+    if (document.activeElement?.tagName === 'INPUT') return;
     e.preventDefault();
-    stopRecording();
+    toggleRecording();
   }
 });
 
