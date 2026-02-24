@@ -51,6 +51,18 @@
     .status.loading { background: #3d3d0a; color: #fbbf24; }
     .status.ready { background: #0a3d0a; color: #4ade80; }
 
+    .session-btn {
+      padding: 0.25rem 0.75rem;
+      border-radius: 4px;
+      border: none;
+      font-size: 0.75rem;
+      cursor: pointer;
+      background: #3b82f6;
+      color: white;
+    }
+    .session-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .session-btn.running { background: #ef4444; }
+
     .main {
       flex: 1;
       display: flex;
@@ -260,8 +272,8 @@
     <h1>Voice Terminal</h1>
     <div class="status-row">
       <span id="ws-status" class="status disconnected">WS: --</span>
-      <span id="whisper-status" class="status loading">STT: --</span>
-      <span id="tts-status" class="status loading">TTS: --</span>
+      <span id="claude-status" class="status loading">Claude: --</span>
+      <button id="session-toggle" class="session-btn" disabled>Start</button>
     </div>
   </div>
 
