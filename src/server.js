@@ -240,6 +240,14 @@ wss.on('connection', (ws) => {
           messages: conversationHistory
         }));
 
+      } else if (message.type === 'clear-history') {
+        // Clear conversation history
+        conversationHistory = [];
+        console.log('Conversation history cleared');
+        ws.send(JSON.stringify({
+          type: 'history-cleared'
+        }));
+
       } else if (message.type === 'voice-command') {
         const transcript = message.transcript;
         console.log(`Voice command: "${transcript}"`);

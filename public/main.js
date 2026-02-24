@@ -16,6 +16,12 @@ const sessionToggle = document.getElementById('session-toggle');
 const transcriptArea = document.getElementById('transcript-area');
 const liveTranscript = document.getElementById('live-transcript');
 const micButton = document.getElementById('mic-button');
+const inputArea = document.getElementById('input-area');
+const inputField = document.getElementById('input-field');
+const sendBtn = document.getElementById('send-btn');
+const cancelBtn = document.getElementById('cancel-btn');
+const clearHistoryBtn = document.getElementById('clear-history');
+const refreshBtn = document.getElementById('refresh-btn');
 
 // WebSocket URL
 const WS_URL = `wss://${location.host}`;
@@ -319,23 +325,18 @@ function initBrowserSpeechRecognition() {
   }
 
   browserRecognition = new SpeechRecognition();
-  browserRecognition.continuous = false;
+  browserRecognition.continuous = true;  // Keep listening until manually stopped
   browserRecognition.interimResults = true;
   browserRecognition.lang = 'en-US';
 
   browserRecognition.onresult = (event) => {
     let transcript = '';
-    let isFinal = false;
-    for (let i = event.resultIndex; i < event.results.length; i++) {
+    for (let i = 0; i < event.results.length; i++) {
       transcript += event.results[i][0].transcript;
-      if (event.results[i].isFinal) isFinal = true;
     }
     lastTranscript = transcript;
     liveTranscript.textContent = transcript;
-    if (isFinal) {
-      transcriptProcessed = true;
-      handleTranscriptionComplete(transcript);
-    }
+    // Don't auto-send on isFinal - wait for user to tap button to stop
   };
 
   browserRecognition.onstart = () => {
@@ -351,12 +352,13 @@ function initBrowserSpeechRecognition() {
 
   browserRecognition.onend = () => {
     if (isRecording) {
+      // Recognition ended unexpectedly while still recording
       isRecording = false;
       micButton.classList.remove('recording');
-    }
-    // Process transcript if not already processed
-    if (!transcriptProcessed && lastTranscript) {
-      handleTranscriptionComplete(lastTranscript);
+      // Show input area with whatever we got
+      if (lastTranscript) {
+        showInputArea(lastTranscript);
+      }
     }
   };
 
@@ -408,12 +410,109 @@ function stopRecording() {
 
   isRecording = false;
   micButton.classList.remove('recording');
-  setProcessing(true);
 
   if (browserRecognition) {
     browserRecognition.stop();
   }
+
+  // Show edit UI instead of auto-sending
+  showInputArea(lastTranscript);
 }
+
+function showInputArea(text = '') {
+  inputField.value = text;
+  inputArea.classList.add('visible');
+  micButton.style.display = 'none';
+  liveTranscript.style.display = 'none';
+  inputField.focus();
+  scrollToBottom();
+}
+
+function scrollToBottom() {
+  requestAnimationFrame(() => {
+    transcriptArea.scrollTop = transcriptArea.scrollHeight;
+  });
+}
+
+function hideInputArea() {
+  inputArea.classList.remove('visible');
+  micButton.style.display = 'flex';
+  liveTranscript.style.display = 'block';
+  liveTranscript.textContent = '';
+}
+
+function sendMessage() {
+  const text = inputField.value.trim();
+  hideInputArea();
+
+  if (!text || text.length < 2) {
+    liveTranscript.textContent = '(no message to send)';
+    return;
+  }
+
+  setProcessing(true);
+  liveTranscript.textContent = 'Sending to Claude...';
+  addMessage('user', text);
+  sendToServer('voice-command', { transcript: text });
+}
+
+function cancelMessage() {
+  hideInputArea();
+  liveTranscript.textContent = '(cancelled)';
+  setTimeout(() => {
+    liveTranscript.textContent = '';
+  }, 1500);
+}
+
+// Input area buttons
+sendBtn.addEventListener('click', sendMessage);
+cancelBtn.addEventListener('click', cancelMessage);
+
+// Enter to send, Shift+Enter for newline
+inputField.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  } else if (e.key === 'Escape') {
+    cancelMessage();
+  }
+});
+
+// Auto-scroll when textarea content changes (grows)
+inputField.addEventListener('input', () => {
+  scrollToBottom();
+  adjustPaddingForControls();
+});
+
+// Watch controls panel size and adjust transcript padding
+const controlsPanel = document.querySelector('.controls');
+function adjustPaddingForControls() {
+  const controlsHeight = controlsPanel.offsetHeight;
+  document.querySelector('.main').style.paddingBottom = controlsHeight + 'px';
+  scrollToBottom();
+}
+
+// Use ResizeObserver to watch for control panel size changes
+if (typeof ResizeObserver !== 'undefined') {
+  const resizeObserver = new ResizeObserver(() => {
+    adjustPaddingForControls();
+  });
+  resizeObserver.observe(controlsPanel);
+}
+
+// Clear history button
+clearHistoryBtn.addEventListener('click', () => {
+  if (confirm('Clear conversation history?')) {
+    sendToServer('clear-history');
+    transcriptArea.innerHTML = '';
+    addMessage('status', 'History cleared.');
+  }
+});
+
+// Refresh button
+refreshBtn.addEventListener('click', () => {
+  location.reload();
+});
 
 // Event listeners - tap to toggle recording
 function toggleRecording() {
@@ -425,9 +524,17 @@ function toggleRecording() {
   }
 }
 
-micButton.addEventListener('click', toggleRecording);
-micButton.addEventListener('touchend', (e) => {
+// Use touchstart for mobile to prevent scroll issues
+micButton.addEventListener('touchstart', (e) => {
   e.preventDefault();
+  e.stopPropagation();
+  toggleRecording();
+}, { passive: false });
+
+// Click for desktop
+micButton.addEventListener('click', (e) => {
+  // Skip if this was triggered by touch
+  if (e.sourceCapabilities?.firesTouchEvents) return;
   toggleRecording();
 });
 
@@ -466,9 +573,7 @@ function addMessage(type, content, spokenSummary = null) {
   transcriptArea.appendChild(div);
 
   // Scroll after DOM renders
-  requestAnimationFrame(() => {
-    div.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  });
+  scrollToBottom();
 }
 
 function escapeHtml(text) {
