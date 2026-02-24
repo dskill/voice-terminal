@@ -5,6 +5,8 @@ let ws = null;
 let isRecording = false;
 let isProcessing = false;
 let claudeSessionRunning = false;
+let currentModel = '';
+let streamingMessageDiv = null; // Reference to streaming message element
 
 // DOM Elements
 const loadingOverlay = document.getElementById('loading-overlay');
@@ -22,6 +24,7 @@ const sendBtn = document.getElementById('send-btn');
 const cancelBtn = document.getElementById('cancel-btn');
 const clearHistoryBtn = document.getElementById('clear-history');
 const refreshBtn = document.getElementById('refresh-btn');
+const contextBarFill = document.getElementById('context-bar-fill');
 
 // WebSocket URL
 const WS_URL = `wss://${location.host}`;
@@ -183,6 +186,13 @@ async function handleServerMessage(data) {
       updateSessionUI(data.running);
       break;
 
+    case 'session-init':
+      // Session initialized with model info
+      currentModel = data.model || '';
+      updateModelDisplay(currentModel);
+      addMessage('status', `Session started (${formatModelName(currentModel)})`);
+      break;
+
     case 'history':
       // Restore conversation history on reconnect
       if (data.messages && data.messages.length > 0) {
@@ -191,7 +201,7 @@ async function handleServerMessage(data) {
           if (msg.type === 'user') {
             addMessage('user', msg.content);
           } else if (msg.type === 'assistant') {
-            addMessage('assistant', msg.content, msg.spokenSummary);
+            addMessage('assistant', msg.content, msg.spokenSummary, msg.metadata);
           }
         }
         addMessage('status', 'Reconnected - conversation history restored.');
@@ -209,15 +219,40 @@ async function handleServerMessage(data) {
       liveTranscript.textContent = data.message;
       break;
 
+    case 'tool-call':
+      // Show tool calls in real-time
+      if (!streamingMessageDiv) {
+        streamingMessageDiv = createStreamingMessage();
+      }
+      appendToolCall(streamingMessageDiv, data.toolName, data.input);
+      liveTranscript.textContent = `Using ${data.toolName}...`;
+      break;
+
     case 'partial':
       // Streaming text update
       streamingResponse += data.text;
-      liveTranscript.textContent = streamingResponse.slice(-100) + '...';
+      if (!streamingMessageDiv) {
+        streamingMessageDiv = createStreamingMessage();
+      }
+      updateStreamingText(streamingMessageDiv, streamingResponse);
+      liveTranscript.textContent = 'Thinking...';
       break;
 
     case 'response':
+      // Finalize streaming message
+      if (streamingMessageDiv) {
+        finalizeStreamingMessage(streamingMessageDiv, data.fullResponse, data.spokenSummary, data.metadata);
+        streamingMessageDiv = null;
+      } else {
+        addMessage('assistant', data.fullResponse, data.spokenSummary, data.metadata);
+      }
       streamingResponse = '';
-      addMessage('assistant', data.fullResponse, data.spokenSummary);
+
+      if (data.model) {
+        currentModel = data.model;
+        updateModelDisplay(currentModel);
+      }
+
       liveTranscript.textContent = 'Speaking...';
 
       if (data.spokenSummary) {
@@ -229,6 +264,11 @@ async function handleServerMessage(data) {
       break;
 
     case 'error':
+      if (streamingMessageDiv) {
+        streamingMessageDiv.remove();
+        streamingMessageDiv = null;
+      }
+      streamingResponse = '';
       addMessage('error', data.message);
       liveTranscript.textContent = '';
       setProcessing(false);
@@ -438,6 +478,17 @@ function scrollToBottom() {
   });
 }
 
+function updateContextBar(percent) {
+  contextBarFill.style.width = percent + '%';
+  contextBarFill.classList.remove('warning', 'danger');
+  if (percent >= 80) {
+    contextBarFill.classList.add('danger');
+  } else if (percent >= 60) {
+    contextBarFill.classList.add('warning');
+  }
+  contextBarFill.parentElement.title = `Context: ${percent}%`;
+}
+
 // Fix initial viewport position on mobile
 window.addEventListener('load', () => {
   window.scrollTo(0, 0);
@@ -545,7 +596,101 @@ document.addEventListener('keydown', (e) => {
 // UI Helpers
 // ============================================
 
-function addMessage(type, content, spokenSummary = null) {
+function formatModelName(model) {
+  if (!model) return 'Unknown';
+  // claude-opus-4-5-20251101 -> Opus 4.5
+  if (model.includes('opus')) return 'Opus 4.5';
+  if (model.includes('sonnet')) return 'Sonnet';
+  if (model.includes('haiku')) return 'Haiku';
+  return model.split('-').slice(1, 3).join(' ');
+}
+
+function formatCost(cost) {
+  if (!cost) return '';
+  if (cost < 0.01) return `$${(cost * 100).toFixed(2)}¢`;
+  return `$${cost.toFixed(4)}`;
+}
+
+function formatDuration(ms) {
+  if (!ms) return '';
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function updateModelDisplay(model) {
+  const modelName = formatModelName(model);
+  claudeStatus.textContent = `Claude: ${modelName}`;
+}
+
+function createStreamingMessage() {
+  const div = document.createElement('div');
+  div.className = 'message assistant streaming';
+  div.innerHTML = `
+    <div class="message-label">Claude</div>
+    <div class="tool-calls"></div>
+    <div class="streaming-text"></div>
+  `;
+  transcriptArea.appendChild(div);
+  scrollToBottom();
+  return div;
+}
+
+function appendToolCall(div, toolName, input) {
+  const toolCalls = div.querySelector('.tool-calls');
+  const toolDiv = document.createElement('div');
+  toolDiv.className = 'tool-call';
+
+  // Format tool input preview
+  let inputPreview = '';
+  if (input) {
+    if (input.command) inputPreview = input.command.slice(0, 50);
+    else if (input.file_path) inputPreview = input.file_path;
+    else if (input.pattern) inputPreview = input.pattern;
+    else inputPreview = JSON.stringify(input).slice(0, 50);
+    if (inputPreview.length >= 50) inputPreview += '...';
+  }
+
+  toolDiv.innerHTML = `<span class="tool-name">${escapeHtml(toolName)}</span>${inputPreview ? ` <span class="tool-input">${escapeHtml(inputPreview)}</span>` : ''}`;
+  toolCalls.appendChild(toolDiv);
+  scrollToBottom();
+}
+
+function updateStreamingText(div, text) {
+  const textDiv = div.querySelector('.streaming-text');
+  textDiv.textContent = text;
+  scrollToBottom();
+}
+
+function finalizeStreamingMessage(div, fullResponse, spokenSummary, metadata) {
+  div.classList.remove('streaming');
+
+  const textDiv = div.querySelector('.streaming-text');
+  textDiv.textContent = fullResponse;
+
+  if (spokenSummary) {
+    const summaryDiv = document.createElement('div');
+    summaryDiv.className = 'spoken-summary';
+    summaryDiv.innerHTML = `<strong>Spoken:</strong> ${escapeHtml(spokenSummary)}`;
+    div.appendChild(summaryDiv);
+  }
+
+  if (metadata) {
+    const metaDiv = document.createElement('div');
+    metaDiv.className = 'message-meta';
+    const parts = [];
+    if (metadata.durationMs) parts.push(formatDuration(metadata.durationMs));
+    if (metadata.totalCostUsd) parts.push(formatCost(metadata.totalCostUsd));
+    if (metadata.numTurns) parts.push(`${metadata.numTurns} turn${metadata.numTurns > 1 ? 's' : ''}`);
+    if (parts.length > 0) {
+      metaDiv.textContent = parts.join(' · ');
+      div.appendChild(metaDiv);
+    }
+  }
+
+  scrollToBottom();
+}
+
+function addMessage(type, content, spokenSummary = null, metadata = null) {
   const div = document.createElement('div');
   div.className = `message ${type}`;
 
@@ -557,10 +702,20 @@ function addMessage(type, content, spokenSummary = null) {
   };
 
   let html = `<div class="message-label">${labels[type] || type}</div>`;
-  html += `<div>${escapeHtml(content)}</div>`;
+  html += `<div class="message-content">${escapeHtml(content)}</div>`;
 
   if (spokenSummary) {
     html += `<div class="spoken-summary"><strong>Spoken:</strong> ${escapeHtml(spokenSummary)}</div>`;
+  }
+
+  if (metadata && type === 'assistant') {
+    const parts = [];
+    if (metadata.durationMs) parts.push(formatDuration(metadata.durationMs));
+    if (metadata.totalCostUsd) parts.push(formatCost(metadata.totalCostUsd));
+    if (metadata.numTurns) parts.push(`${metadata.numTurns} turn${metadata.numTurns > 1 ? 's' : ''}`);
+    if (parts.length > 0) {
+      html += `<div class="message-meta">${parts.join(' · ')}</div>`;
+    }
   }
 
   div.innerHTML = html;

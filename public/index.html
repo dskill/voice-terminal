@@ -129,6 +129,45 @@
       color: #fbbf24;
     }
 
+    .message-meta {
+      margin-top: 0.5rem;
+      font-size: 0.7rem;
+      color: #6b7280;
+    }
+
+    .tool-calls {
+      margin-bottom: 0.5rem;
+    }
+
+    .tool-call {
+      font-size: 0.75rem;
+      padding: 0.25rem 0.5rem;
+      background: rgba(59, 130, 246, 0.15);
+      border-radius: 4px;
+      margin-bottom: 0.25rem;
+      display: inline-block;
+      margin-right: 0.25rem;
+    }
+
+    .tool-name {
+      color: #60a5fa;
+      font-weight: 500;
+    }
+
+    .tool-input {
+      color: #9ca3af;
+      font-family: 'SF Mono', Monaco, monospace;
+      font-size: 0.7rem;
+    }
+
+    .message.streaming {
+      border-left-color: #f59e0b;
+    }
+
+    .message.streaming .streaming-text {
+      opacity: 0.8;
+    }
+
     .controls {
       flex-shrink: 0;
       display: flex;
@@ -286,6 +325,29 @@
       border-color: #3b82f6;
     }
 
+    .context-bar {
+      width: 60px;
+      height: 6px;
+      background: #333;
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .context-bar-fill {
+      height: 100%;
+      background: #22c55e;
+      transition: width 0.3s, background 0.3s;
+      width: 0%;
+    }
+
+    .context-bar-fill.warning {
+      background: #f59e0b;
+    }
+
+    .context-bar-fill.danger {
+      background: #ef4444;
+    }
+
     .loading-overlay {
       position: fixed;
       top: 0;
@@ -386,6 +448,9 @@
       <button id="session-toggle" class="session-btn" disabled>Start</button>
       <button id="clear-history" class="control-btn">Clear</button>
       <button id="refresh-btn" class="control-btn">Refresh</button>
+      <div class="context-bar" title="Context usage">
+        <div id="context-bar-fill" class="context-bar-fill"></div>
+      </div>
     </div>
     <div class="live-transcript" id="live-transcript"></div>
     <div id="input-area" class="input-area">

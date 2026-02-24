@@ -35,6 +35,8 @@ let claudeReady = false;
 let responseBuffer = '';
 let connectedClients = new Set();
 let conversationHistory = []; // Store conversation for reconnecting clients
+let sessionMetadata = {}; // Store session info from init message
+let currentTurnEvents = []; // Collect all events for current turn
 
 function startClaudeSession() {
   if (claudeProcess) {
@@ -110,19 +112,56 @@ function stopClaudeSession() {
 }
 
 function handleClaudeMessage(msg) {
-  console.log('Claude message:', msg.type);
+  console.log('Claude message:', msg.type, msg.subtype || '');
 
-  if (msg.type === 'assistant') {
-    // Assistant message with content
-    if (msg.message?.content) {
-      for (const block of msg.message.content) {
+  // Store all events for debugging/analysis
+  currentTurnEvents.push(msg);
+
+  if (msg.type === 'system' && msg.subtype === 'init') {
+    // Session initialization - contains model, tools, etc.
+    sessionMetadata = {
+      model: msg.model,
+      tools: msg.tools,
+      sessionId: msg.session_id,
+      claudeCodeVersion: msg.claude_code_version,
+      agents: msg.agents
+    };
+    console.log('Session initialized:', sessionMetadata.model);
+    broadcastToClients({
+      type: 'session-init',
+      model: msg.model,
+      claudeCodeVersion: msg.claude_code_version
+    });
+  } else if (msg.type === 'assistant') {
+    // Assistant message with content - contains model and usage info
+    const message = msg.message;
+    if (message?.content) {
+      for (const block of message.content) {
         if (block.type === 'text') {
           responseBuffer += block.text;
+          // Stream text to client
+          broadcastToClients({
+            type: 'partial',
+            text: block.text
+          });
+        } else if (block.type === 'tool_use') {
+          // Tool call - broadcast it
+          console.log('Tool call:', block.name, JSON.stringify(block.input).slice(0, 100));
+          broadcastToClients({
+            type: 'tool-call',
+            toolName: block.name,
+            toolId: block.id,
+            input: block.input
+          });
         }
       }
     }
+    // Update model info if present
+    if (message?.model) {
+      sessionMetadata.model = message.model;
+    }
   } else if (msg.type === 'content_block_delta') {
-    // Streaming text delta
+    // Streaming text delta (if --include-partial-messages is used)
     if (msg.delta?.text) {
       responseBuffer += msg.delta.text;
       broadcastToClients({
@@ -131,29 +170,53 @@ function handleClaudeMessage(msg) {
       });
     }
   } else if (msg.type === 'result') {
-    // Final result
+    // Final result - contains cost, usage, model breakdown
     const fullResponse = responseBuffer;
     responseBuffer = '';
 
     const spokenSummary = extractSpokenSummary(fullResponse);
+
+    // Extract detailed metadata from result
+    const metadata = {
+      durationMs: msg.duration_ms,
+      durationApiMs: msg.duration_api_ms,
+      numTurns: msg.num_turns,
+      totalCostUsd: msg.total_cost_usd,
+      usage: msg.usage,
+      modelUsage: msg.modelUsage,
+      isError: msg.is_error
+    };
+
+    console.log('Result:', JSON.stringify({
+      duration: metadata.durationMs,
+      cost: metadata.totalCostUsd,
+      turns: metadata.numTurns,
+      models: Object.keys(metadata.modelUsage || {})
+    }));
 
     // Store in history
     conversationHistory.push({
       type: 'assistant',
       content: fullResponse,
       spokenSummary,
+      metadata,
       timestamp: Date.now()
     });
 
     broadcastToClients({
       type: 'response',
       fullResponse,
-      spokenSummary
+      spokenSummary,
+      model: sessionMetadata.model,
+      metadata
     });
+
+    // Clear turn events for next turn
+    currentTurnEvents = [];
   } else if (msg.type === 'error') {
     broadcastToClients({
       type: 'error',
-      message: msg.error?.message || 'Unknown error'
+      message: msg.error?.message || msg.message || 'Unknown error'
     });
   }
 }
