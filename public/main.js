@@ -86,6 +86,8 @@ startButton.addEventListener('click', async () => {
     setTimeout(() => {
       loadingOverlay.classList.add('hidden');
       addMessage('status', 'Voice terminal ready. Tap the mic button to start/stop recording.');
+      // Force scroll to make content visible
+      setTimeout(scrollToBottom, 100);
     }, 1000);
 
   } catch (error) {
@@ -194,6 +196,8 @@ async function handleServerMessage(data) {
         }
         addMessage('status', 'Reconnected - conversation history restored.');
       }
+      // Force scroll after history loads
+      setTimeout(scrollToBottom, 100);
       break;
 
     case 'session-ended':
@@ -434,6 +438,13 @@ function scrollToBottom() {
   });
 }
 
+// Fix initial viewport position on mobile
+window.addEventListener('load', () => {
+  window.scrollTo(0, 0);
+  document.body.scrollTop = 0;
+  document.documentElement.scrollTop = 0;
+});
+
 function hideInputArea() {
   inputArea.classList.remove('visible');
   micButton.style.display = 'flex';
@@ -481,24 +492,7 @@ inputField.addEventListener('keydown', (e) => {
 // Auto-scroll when textarea content changes (grows)
 inputField.addEventListener('input', () => {
   scrollToBottom();
-  adjustPaddingForControls();
 });
-
-// Watch controls panel size and adjust transcript padding
-const controlsPanel = document.querySelector('.controls');
-function adjustPaddingForControls() {
-  const controlsHeight = controlsPanel.offsetHeight;
-  document.querySelector('.main').style.paddingBottom = controlsHeight + 'px';
-  scrollToBottom();
-}
-
-// Use ResizeObserver to watch for control panel size changes
-if (typeof ResizeObserver !== 'undefined') {
-  const resizeObserver = new ResizeObserver(() => {
-    adjustPaddingForControls();
-  });
-  resizeObserver.observe(controlsPanel);
-}
 
 // Clear history button
 clearHistoryBtn.addEventListener('click', () => {
