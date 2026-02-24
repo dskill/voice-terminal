@@ -1,15 +1,16 @@
 # Voice Terminal
 
-> **Work in Progress**
+> **Work in Progress** - This is an experimental voice interface for controlling VMs via Claude Code.
 
-Voice-driven interface for controlling VMs via Claude Code. Speak commands, get responses read back to you.
+Speak commands, see them transcribed, edit if needed, and hear Claude's responses read back to you.
 
 ## Features
 
-- Push-to-talk voice input (browser native speech recognition)
-- Persistent Claude Code session with streaming responses
-- Text-to-speech responses (browser native)
-- Session survives page refreshes/reconnects
+- **Tap-to-talk voice input** - Browser native speech recognition (continuous until you tap to stop)
+- **Edit before send** - Review and edit transcription before sending to Claude
+- **Persistent sessions** - Claude Code session survives page refreshes/reconnects
+- **Text-to-speech** - Responses include a spoken summary read aloud
+- **Mobile-friendly** - Fixed bottom controls, proper viewport handling
 
 ## Setup
 
@@ -22,13 +23,23 @@ Access at `https://your-vm.exe.xyz:3456/`
 
 ## Usage
 
-1. Click "Start Voice Terminal"
-2. Hold the mic button (or spacebar) and speak
-3. Release to send command to Claude
-4. Listen to the spoken response
+1. Click "Start Voice Terminal" to initialize
+2. Tap the mic button and speak (it listens until you tap again)
+3. Review/edit the transcription in the text field
+4. Tap "Send" or press Enter to send to Claude
+5. Listen to the spoken summary
+
+## Controls
+
+- **Start/Stop** - Toggle Claude Code session
+- **Clear** - Clear conversation history (client and server)
+- **Refresh** - Reload the page (useful for testing changes)
+- **Cancel** - Discard current transcription without sending
+- **Spacebar** - Toggle recording (desktop)
+- **Escape** - Cancel current transcription
 
 ## Requirements
 
 - Node.js 18+
-- Claude Code CLI installed
-- Chrome recommended (Safari has limited speech recognition support)
+- Claude Code CLI installed and authenticated
+- Modern browser with Speech Recognition API (Chrome recommended, Safari limited)
