@@ -48,7 +48,8 @@ function startClaudeSession() {
     '--print',
     '--output-format', 'stream-json',
     '--input-format', 'stream-json',
-    '--verbose'
+    '--verbose',
+    '--dangerously-skip-permissions'
   ], {
     cwd: process.env.HOME,
     env: { ...process.env },

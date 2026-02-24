@@ -453,7 +453,11 @@ function addMessage(type, content, spokenSummary = null) {
 
   div.innerHTML = html;
   transcriptArea.appendChild(div);
-  transcriptArea.scrollTop = transcriptArea.scrollHeight;
+
+  // Scroll after DOM renders
+  requestAnimationFrame(() => {
+    div.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  });
 }
 
 function escapeHtml(text) {
