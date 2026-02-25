@@ -81,8 +81,13 @@ You are being controlled via a voice interface. Be concise. After completing req
 
 ```bash
 npm install
-npm run dev     # Starts server on port 3456
+tmux new-session -d -s voice-terminal -c /path/to/voice-terminal 'npm run dev'
 ```
+
+**Important:** The server spawns a Claude Code subprocess. If you run `npm run dev` directly from within a Claude Code session, the subprocess will fail because Claude Code sets a `CLAUDECODE` environment variable to prevent nested sessions. Running in tmux gives the server a clean shell environment without that variable.
+
+To view logs: `tmux attach -t voice-terminal`
+To restart: `tmux kill-session -t voice-terminal` then re-run the command above.
 
 Access at `https://your-vm.exe.xyz:3456/`
 

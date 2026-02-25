@@ -6,7 +6,7 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "concurrently \"vite build --watch\" \"node --watch src/server.js\"",
+    "dev": "vite build && concurrently \"vite build --watch\" \"node --watch src/server.js\"",
     "build": "vite build",
     "server": "node src/server.js"
   },
