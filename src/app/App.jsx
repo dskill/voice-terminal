@@ -121,7 +121,7 @@ export default function App() {
     const text = speech.stopListening();
     setInputText(text);
     setShowInput(true);
-    setLiveText('');
+    setLiveText('Review or tap send');
   }, [speech]);
 
   const toggleRecording = useCallback(() => {
@@ -233,14 +233,13 @@ export default function App() {
             visible={showInput}
           />
 
-          {!showInput && (
-            <MicButton
-              isRecording={speech.isListening}
-              isProcessing={isProcessing}
-              disabled={isProcessing || !ws.claudeRunning}
-              onClick={toggleRecording}
-            />
-          )}
+          <MicButton
+            isRecording={speech.isListening}
+            isProcessing={isProcessing}
+            isSendMode={showInput}
+            disabled={isProcessing || !ws.claudeRunning}
+            onClick={showInput ? sendMessage : toggleRecording}
+          />
         </div>
       </div>
     </div>
