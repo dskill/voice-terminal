@@ -53,6 +53,7 @@ function startClaudeSession() {
     '--print',
     '--output-format', 'stream-json',
     '--input-format', 'stream-json',
+    '--include-partial-messages',
     '--verbose',
     '--dangerously-skip-permissions'
   ];
@@ -138,12 +139,7 @@ function handleClaudeMessage(msg) {
     if (message?.content) {
       for (const block of message.content) {
         if (block.type === 'text') {
-          responseBuffer += block.text;
-          // Stream text to client
-          broadcastToClients({
-            type: 'partial',
-            text: block.text
-          });
+          // Text already streamed via stream_event deltas; skip to avoid duplication
         } else if (block.type === 'tool_use') {
           // Tool call - broadcast it
           console.log('Tool call:', block.name, JSON.stringify(block.input).slice(0, 100));
@@ -160,13 +156,14 @@ function handleClaudeMessage(msg) {
     if (message?.model) {
       sessionMetadata.model = message.model;
     }
-  } else if (msg.type === 'content_block_delta') {
-    // Streaming text delta (if --include-partial-messages is used)
-    if (msg.delta?.text) {
-      responseBuffer += msg.delta.text;
+  } else if (msg.type === 'stream_event') {
+    // Streaming events from --include-partial-messages
+    const event = msg.event;
+    if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+      responseBuffer += event.delta.text;
       broadcastToClients({
         type: 'partial',
-        text: msg.delta.text
+        text: event.delta.text
       });
     }
   } else if (msg.type === 'result') {
