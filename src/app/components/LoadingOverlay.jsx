@@ -25,6 +25,14 @@ export default function LoadingOverlay({ onStart }) {
         throw e;
       }
 
+      // Unlock TTS on this user gesture (important for mobile browsers)
+      if ('speechSynthesis' in window) {
+        const u = new SpeechSynthesisUtterance(' ');
+        u.volume = 0;
+        speechSynthesis.speak(u);
+        addLog('Audio output unlocked');
+      }
+
       addLog('Ready!');
       setStatus('ready');
 

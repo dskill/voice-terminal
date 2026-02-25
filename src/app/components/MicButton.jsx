@@ -1,6 +1,6 @@
 import React from 'react';
 
-export default function MicButton({ isRecording, isProcessing, isSendMode, disabled, onClick }) {
+export default function MicButton({ isRecording, isProcessing, isSendMode, disabled, onClick, onCancel }) {
   let bgClass = 'bg-gradient-to-br from-blue-500 to-blue-700 shadow-blue-500/30 animate-glow';
   let extraClass = '';
 
@@ -25,13 +25,26 @@ export default function MicButton({ isRecording, isProcessing, isSendMode, disab
     <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
   );
 
+  const cancelIcon = (
+    <>
+      <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+    </>
+  );
+
+  const handleClick = isProcessing ? onCancel : onClick;
+  const isDisabled = isProcessing ? false : disabled;
+
+  let icon = micIcon;
+  if (isProcessing) icon = cancelIcon;
+  else if (isSendMode) icon = sendIcon;
+
   return (
     <button
       onPointerDown={(e) => {
         e.preventDefault();
-        if (!disabled) onClick();
+        if (!isDisabled) handleClick();
       }}
-      disabled={disabled}
+      disabled={isDisabled}
       className={`
         w-20 h-20 rounded-full flex items-center justify-center
         text-white shadow-lg transition-all duration-200
@@ -41,7 +54,7 @@ export default function MicButton({ isRecording, isProcessing, isSendMode, disab
       `}
     >
       <svg className="w-8 h-8" viewBox="0 0 24 24" fill="currentColor">
-        {isSendMode ? sendIcon : micIcon}
+        {icon}
       </svg>
     </button>
   );

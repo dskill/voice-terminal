@@ -70,6 +70,7 @@ export default function useWebSocket() {
   const startSession = useCallback(() => send('start-session'), [send]);
   const stopSession = useCallback(() => send('stop-session'), [send]);
   const sendCommand = useCallback((transcript) => send('voice-command', { transcript }), [send]);
+  const cancelRequest = useCallback(() => send('cancel-request'), [send]);
   const clearHistory = useCallback(() => send('clear-history'), [send]);
   const getHistory = useCallback(() => send('get-history'), [send]);
 
@@ -83,6 +84,7 @@ export default function useWebSocket() {
     startSession,
     stopSession,
     sendCommand,
+    cancelRequest,
     clearHistory,
     getHistory,
   };

@@ -37,6 +37,7 @@ let connectedClients = new Set();
 let conversationHistory = []; // Store conversation for reconnecting clients
 let sessionMetadata = {}; // Store session info from init message
 let currentTurnEvents = []; // Collect all events for current turn
+let cancelledTurn = false; // Soft-cancel: ignore remaining output for this turn
 
 function startClaudeSession() {
   if (claudeProcess) {
@@ -99,6 +100,17 @@ function startClaudeSession() {
   console.log('Claude session started');
 }
 
+function interruptClaude() {
+  if (!claudeProcess) {
+    console.log('No Claude session to interrupt');
+    return false;
+  }
+  console.log('Soft-cancelling current turn (session stays alive)...');
+  cancelledTurn = true;
+  responseBuffer = '';
+  return true;
+}
+
 function stopClaudeSession() {
   if (!claudeProcess) {
     console.log('No Claude session running');
@@ -134,6 +146,7 @@ function handleClaudeMessage(msg) {
       claudeCodeVersion: msg.claude_code_version
     });
   } else if (msg.type === 'assistant') {
+    if (cancelledTurn) return; // Silently drain until result
     // Assistant message with content - contains model and usage info
     const message = msg.message;
     if (message?.content) {
@@ -157,6 +170,7 @@ function handleClaudeMessage(msg) {
       sessionMetadata.model = message.model;
     }
   } else if (msg.type === 'stream_event') {
+    if (cancelledTurn) return; // Silently drain until result
     // Streaming events from --include-partial-messages
     const event = msg.event;
     if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
@@ -167,7 +181,17 @@ function handleClaudeMessage(msg) {
       });
     }
   } else if (msg.type === 'result') {
-    // Final result - contains cost, usage, model breakdown
+    // Final result - turn is done, reset cancel flag
+    const wasCancelled = cancelledTurn;
+    cancelledTurn = false;
+    currentTurnEvents = [];
+
+    if (wasCancelled) {
+      responseBuffer = '';
+      console.log('Cancelled turn finished draining, session ready for next message');
+      return;
+    }
+
     const fullResponse = responseBuffer;
     responseBuffer = '';
 
@@ -207,9 +231,6 @@ function handleClaudeMessage(msg) {
       model: sessionMetadata.model,
       metadata
     });
-
-    // Clear turn events for next turn
-    currentTurnEvents = [];
   } else if (msg.type === 'error') {
     broadcastToClients({
       type: 'error',
@@ -242,6 +263,7 @@ function sendToClaud(userMessage) {
     }
   };
 
+  cancelledTurn = false;
   responseBuffer = '';
   claudeProcess.stdin.write(JSON.stringify(message) + '\n');
 
@@ -307,6 +329,13 @@ wss.on('connection', (ws) => {
         ws.send(JSON.stringify({
           type: 'history-cleared'
         }));
+
+      } else if (message.type === 'cancel-request') {
+        const interrupted = interruptClaude();
+        broadcastToClients({
+          type: 'request-cancelled',
+          success: interrupted
+        });
 
       } else if (message.type === 'voice-command') {
         const transcript = message.transcript;

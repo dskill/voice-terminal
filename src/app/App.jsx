@@ -98,6 +98,13 @@ export default function App() {
       setIsProcessing(false);
     });
 
+    ws.setHandler('request-cancelled', () => {
+      setStreamingMessage(null);
+      setIsProcessing(false);
+      setLiveText('Cancelled');
+      setTimeout(() => setLiveText(''), 1500);
+    });
+
     ws.setHandler('history-cleared', () => {
       // handled by local state clear
     });
@@ -163,6 +170,11 @@ export default function App() {
     setInputText('');
     setLiveText('');
   }, []);
+
+  const cancelProcessing = useCallback(() => {
+    ws.cancelRequest();
+    tts.stop();
+  }, [ws, tts]);
 
   // ---- Session controls ----
 
@@ -237,8 +249,9 @@ export default function App() {
             isRecording={speech.isListening}
             isProcessing={isProcessing}
             isSendMode={showInput}
-            disabled={isProcessing || !ws.claudeRunning}
+            disabled={!ws.claudeRunning}
             onClick={showInput ? sendMessage : toggleRecording}
+            onCancel={cancelProcessing}
           />
         </div>
       </div>
