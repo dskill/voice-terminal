@@ -215,6 +215,9 @@ export default function App() {
 
   return (
     <div className="h-dvh flex flex-col bg-slate-900 text-slate-100">
+      <div className="bg-yellow-900 text-yellow-200 text-xs px-3 py-1 font-mono truncate">
+        TTS: {tts.debug}
+      </div>
       <Header />
 
       <div className="flex-1 flex flex-col p-4 overflow-hidden min-h-0">
@@ -231,7 +234,16 @@ export default function App() {
             onRefresh={() => location.reload()}
           />
 
-          {liveText && !showInput && (
+          {tts.pendingText && (
+            <button
+              onClick={() => tts.speakNow()}
+              className="w-full py-3 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white text-base font-medium rounded-lg animate-pulse"
+            >
+              Tap to hear response
+            </button>
+          )}
+
+          {liveText && !showInput && !tts.pendingText && (
             <div className="text-sm text-slate-400 text-center min-h-[1.5em] px-4">
               {liveText}
             </div>
