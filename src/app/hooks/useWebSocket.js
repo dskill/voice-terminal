@@ -25,6 +25,8 @@ export default function useWebSocket() {
       const ws = new WebSocket(url);
       wsRef.current = ws;
 
+      ws.binaryType = 'arraybuffer';
+
       ws.onopen = () => {
         setIsConnected(true);
         send('get-history');
@@ -41,6 +43,13 @@ export default function useWebSocket() {
       };
 
       ws.onmessage = (event) => {
+        // Binary messages are TTS audio data
+        if (event.data instanceof ArrayBuffer) {
+          const handler = handlersRef.current['tts-audio-data'];
+          if (handler) handler(event.data);
+          return;
+        }
+
         const data = JSON.parse(event.data);
 
         // Handle session status internally

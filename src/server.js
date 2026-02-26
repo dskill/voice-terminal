@@ -7,6 +7,7 @@ import { dirname, join } from 'path';
 import { existsSync, readFileSync, unlinkSync } from 'fs';
 import { createInterface } from 'readline';
 import { tmpdir } from 'os';
+import { loadTTSModel, isTTSReady, synthesize } from './tts.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -232,6 +233,11 @@ function handleClaudeMessage(msg) {
       model: sessionMetadata.model,
       metadata
     });
+
+    // Synthesize TTS audio asynchronously
+    if (spokenSummary && isTTSReady()) {
+      synthesizeAndBroadcastAudio(spokenSummary);
+    }
   } else if (msg.type === 'error') {
     broadcastToClients({
       type: 'error',
@@ -277,6 +283,28 @@ function broadcastToClients(message) {
     if (client.readyState === 1) { // WebSocket.OPEN
       client.send(json);
     }
+  }
+}
+
+async function synthesizeAndBroadcastAudio(text) {
+  try {
+    console.log(`[TTS] Synthesizing: "${text.slice(0, 80)}..."`);
+    const { audio, samplingRate } = await synthesize(text);
+    console.log(`[TTS] Done: ${audio.length} samples @ ${samplingRate}Hz`);
+
+    // Send metadata first
+    broadcastToClients({ type: 'tts-audio', samplingRate, numSamples: audio.length });
+
+    // Send raw PCM as binary
+    const buffer = Buffer.from(audio.buffer);
+    for (const client of connectedClients) {
+      if (client.readyState === 1) {
+        client.send(buffer);
+      }
+    }
+  } catch (err) {
+    console.error('[TTS] Synthesis error:', err);
+    broadcastToClients({ type: 'tts-error', message: err.message });
   }
 }
 
@@ -395,6 +423,9 @@ server.listen(PORT, () => {
 
   // Auto-start Claude session
   startClaudeSession();
+
+  // Fire-and-forget TTS model loading
+  loadTTSModel();
 });
 
 // Graceful shutdown

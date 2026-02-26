@@ -25,12 +25,14 @@ export default function LoadingOverlay({ onStart }) {
         throw e;
       }
 
-      // Unlock TTS on this user gesture (important for mobile browsers)
-      if ('speechSynthesis' in window) {
-        const u = new SpeechSynthesisUtterance(' ');
-        u.volume = 0;
-        speechSynthesis.speak(u);
+      // Unlock AudioContext on this user gesture (important for mobile browsers)
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        await ctx.resume();
+        ctx.close();
         addLog('Audio output unlocked');
+      } catch (e) {
+        addLog('Audio unlock skipped');
       }
 
       addLog('Ready!');

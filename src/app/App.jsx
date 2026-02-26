@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import useWebSocket from './hooks/useWebSocket';
 import useSpeechRecognition from './hooks/useSpeechRecognition';
 import useTTS from './hooks/useTTS';
@@ -22,6 +22,7 @@ export default function App() {
   const ws = useWebSocket();
   const speech = useSpeechRecognition();
   const tts = useTTS();
+  const ttsMetaRef = useRef(null);
 
   // ---- WebSocket message handlers ----
 
@@ -73,7 +74,7 @@ export default function App() {
       setLiveText('Thinking...');
     });
 
-    ws.setHandler('response', async (data) => {
+    ws.setHandler('response', (data) => {
       // Finalize streaming message into a regular message
       setStreamingMessage((prev) => {
         const toolCalls = prev?.toolCalls || [];
@@ -81,12 +82,30 @@ export default function App() {
         return null;
       });
 
-      setLiveText('Speaking...');
-
       if (data.spokenSummary) {
-        await tts.speak(data.spokenSummary);
+        setLiveText('Generating speech...');
+      } else {
+        setLiveText('');
+        setIsProcessing(false);
       }
+    });
 
+    ws.setHandler('tts-audio', (data) => {
+      ttsMetaRef.current = { samplingRate: data.samplingRate, numSamples: data.numSamples };
+    });
+
+    ws.setHandler('tts-audio-data', (arrayBuffer) => {
+      const meta = ttsMetaRef.current;
+      if (!meta) return;
+      const float32 = new Float32Array(arrayBuffer);
+      tts.playAudio(float32, meta.samplingRate);
+      ttsMetaRef.current = null;
+      setLiveText('');
+      setIsProcessing(false);
+    });
+
+    ws.setHandler('tts-error', (data) => {
+      console.warn('[TTS] Server error:', data.message);
       setLiveText('');
       setIsProcessing(false);
     });
@@ -108,7 +127,7 @@ export default function App() {
     ws.setHandler('history-cleared', () => {
       // handled by local state clear
     });
-  }, [ws.setHandler, addMessage, tts.speak]);
+  }, [ws.setHandler, addMessage, tts.playAudio]);
 
   // ---- Recording flow ----
 
@@ -215,9 +234,6 @@ export default function App() {
 
   return (
     <div className="h-dvh flex flex-col bg-slate-900 text-slate-100">
-      <div className="bg-yellow-900 text-yellow-200 text-xs px-3 py-1 font-mono truncate">
-        TTS: {tts.debug}
-      </div>
       <Header />
 
       <div className="flex-1 flex flex-col p-4 overflow-hidden min-h-0">
@@ -234,16 +250,7 @@ export default function App() {
             onRefresh={() => location.reload()}
           />
 
-          {tts.pendingText && (
-            <button
-              onClick={() => tts.speakNow()}
-              className="w-full py-3 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white text-base font-medium rounded-lg animate-pulse"
-            >
-              Tap to hear response
-            </button>
-          )}
-
-          {liveText && !showInput && !tts.pendingText && (
+          {liveText && !showInput && (
             <div className="text-sm text-slate-400 text-center min-h-[1.5em] px-4">
               {liveText}
             </div>
