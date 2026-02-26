@@ -1,6 +1,9 @@
 import { pipeline } from '@huggingface/transformers';
 
 const MODEL_ID = 'onnx-community/Supertonic-TTS-ONNX';
+const VOICE = 'F2'; // Available: M1-M5, F1-F5
+const NUM_INFERENCE_STEPS = 3; // Default 5, lower = faster (range 1-50)
+const SPEED = 1.2; // Default 1.0, higher = faster speech (range 0.8-1.2)
 
 let ttsInstance = null;
 let speakerEmbeddings = null;
@@ -13,7 +16,7 @@ export function isTTSReady() {
 async function loadSpeakerEmbeddings() {
   if (speakerEmbeddings) return speakerEmbeddings;
 
-  const url = `https://huggingface.co/${MODEL_ID}/resolve/main/voices/M1.bin`;
+  const url = `https://huggingface.co/${MODEL_ID}/resolve/main/voices/${VOICE}.bin`;
   console.log('[TTS] Downloading speaker embeddings...');
   const response = await fetch(url);
   const buffer = await response.arrayBuffer();
@@ -44,6 +47,8 @@ export async function loadTTSModel() {
 
     await ttsInstance('Hello', {
       speaker_embeddings: speakerEmbeddings,
+      num_inference_steps: NUM_INFERENCE_STEPS,
+      speed: SPEED,
     });
 
     ready = true;
@@ -60,6 +65,8 @@ export async function synthesize(text) {
 
   const result = await ttsInstance(text, {
     speaker_embeddings: speakerEmbeddings,
+    num_inference_steps: NUM_INFERENCE_STEPS,
+    speed: SPEED,
   });
 
   return {
