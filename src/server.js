@@ -15,12 +15,10 @@ const __dirname = dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3456;
 
-// System prompt for voice interface
-const VOICE_SYSTEM_PROMPT = `You are being controlled via a voice interface. Be concise. After completing requests, end your response with a spoken summary in this format: [SPOKEN: your 1-2 sentence summary]. Keep it conversational - it will be read aloud.`;
-
 // Serve static files
 const distPath = join(__dirname, '../dist');
 const publicPath = join(__dirname, '../public');
+const systemPromptPath = join(__dirname, '../system-prompt.md');
 const staticPath = existsSync(distPath) ? distPath : publicPath;
 console.log(`Serving static files from: ${staticPath}`);
 app.use(express.static(staticPath));
@@ -247,6 +245,7 @@ function startClaudeSession() {
     '--input-format', 'stream-json',
     '--include-partial-messages',
     '--verbose',
+    '--append-system-prompt-file', systemPromptPath,
     '--dangerously-skip-permissions'
   ];
 
@@ -473,7 +472,7 @@ function sendToClaud(userMessage) {
     type: 'user',
     message: {
       role: 'user',
-      content: VOICE_SYSTEM_PROMPT + '\n\nUser request: ' + userMessage
+      content: userMessage
     }
   };
 
