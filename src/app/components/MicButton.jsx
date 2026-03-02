@@ -118,19 +118,22 @@ export default function MicButton({ isRecording, audioLevel = 0, isProcessing, i
           {Array.from({ length: 18 }).map((_, i) => {
             const angle = (360 / 18) * i;
             const mod = 0.55 + (Math.sin(i * 1.7) ** 2) * 0.45;
-            const level = Math.max(0.15, Math.min(1, audioLevel * mod + 0.12));
+            const level = Math.max(0.15, Math.min(1, audioLevel * 10 * mod + 0.12));
             const height = 8 + Math.round(level * 22);
             return (
               <div
                 key={i}
-                className="absolute left-1/2 top-1/2"
+                className="absolute left-1/2 top-1/2 overflow-visible"
                 style={{
-                  transform: `translate(-50%, -50%) rotate(${angle}deg) translateY(-54px)`
+                  transform: `rotate(${angle}deg)`,
+                  width: '3px',
+                  height: 0,
+                  marginLeft: '-1.5px',
                 }}
               >
                 <span
-                  className="block w-[3px] rounded-full bg-red-300/95 shadow-[0_0_10px_rgba(252,165,165,0.9)] transition-[height] duration-75"
-                  style={{ height: `${height}px` }}
+                  className="block w-[3px] rounded-full bg-red-300/95 shadow-[0_0_10px_rgba(252,165,165,0.9)] transition-[height] duration-75 absolute"
+                  style={{ height: `${height}px`, bottom: '44px' }}
                 />
               </div>
             );
