@@ -114,22 +114,28 @@ export default function MicButton({ isRecording, audioLevel = 0, isProcessing, i
       `}
     >
       {isRecording && (
-        <>
-          <span className="absolute -inset-2 rounded-full border-2 border-red-300/80 animate-ping pointer-events-none" />
-          <div className="absolute -bottom-6 left-1/2 -translate-x-1/2 w-16 h-4 flex items-end justify-center gap-0.5 pointer-events-none">
-            {[0.25, 0.45, 0.7, 1, 0.7, 0.45, 0.25].map((scale, i) => {
-              const value = Math.max(0.12, Math.min(1, audioLevel * scale + 0.08));
-              const height = 2 + Math.round(value * 12);
-              return (
+        <div className="absolute -inset-8 pointer-events-none">
+          {Array.from({ length: 18 }).map((_, i) => {
+            const angle = (360 / 18) * i;
+            const mod = 0.55 + (Math.sin(i * 1.7) ** 2) * 0.45;
+            const level = Math.max(0.15, Math.min(1, audioLevel * mod + 0.12));
+            const height = 8 + Math.round(level * 22);
+            return (
+              <div
+                key={i}
+                className="absolute left-1/2 top-1/2"
+                style={{
+                  transform: `translate(-50%, -50%) rotate(${angle}deg) translateY(-54px)`
+                }}
+              >
                 <span
-                  key={i}
-                  className="w-1 rounded-sm bg-red-300/90 transition-[height] duration-75"
+                  className="block w-[3px] rounded-full bg-red-300/95 shadow-[0_0_10px_rgba(252,165,165,0.9)] transition-[height] duration-75"
                   style={{ height: `${height}px` }}
                 />
-              );
-            })}
-          </div>
-        </>
+              </div>
+            );
+          })}
+        </div>
       )}
       <svg className="w-8 h-8" viewBox="0 0 24 24" fill="currentColor">
         {icon}
