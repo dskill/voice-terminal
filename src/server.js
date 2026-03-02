@@ -32,6 +32,7 @@ const wss = new WebSocketServer({ server });
 
 let claudeProcess = null;
 let claudeReady = false;
+let sessionInitialized = false;
 let responseBuffer = '';
 let connectedClients = new Set();
 let conversationHistory = []; // Store conversation for reconnecting clients
@@ -236,6 +237,7 @@ function startClaudeSession() {
   currentTurnToolCalls = [];
   inFlightTurn = null;
   nextMessageId = 1;
+  sessionInitialized = false;
 
   console.log('Starting Claude session with stream-json mode...');
 
@@ -277,6 +279,7 @@ function startClaudeSession() {
     console.log(`Claude process exited with code ${code}`);
     claudeProcess = null;
     claudeReady = false;
+    sessionInitialized = false;
     broadcastToClients({ type: 'session-ended', code });
   });
 
@@ -311,6 +314,7 @@ function stopClaudeSession() {
   claudeProcess.kill('SIGTERM');
   claudeProcess = null;
   claudeReady = false;
+  sessionInitialized = false;
   conversationHistory = [];
   currentTurnToolCalls = [];
   inFlightTurn = null;
@@ -332,11 +336,20 @@ function handleClaudeMessage(msg) {
       agents: msg.agents
     };
     console.log('Session initialized:', sessionMetadata.model);
-    broadcastToClients({
-      type: 'session-init',
-      model: msg.model,
-      claudeCodeVersion: msg.claude_code_version
-    });
+    if (!sessionInitialized) {
+      sessionInitialized = true;
+      broadcastToClients({
+        type: 'session-init',
+        model: msg.model,
+        claudeCodeVersion: msg.claude_code_version
+      });
+    } else {
+      broadcastToClients({
+        type: 'session-reinit',
+        model: msg.model,
+        claudeCodeVersion: msg.claude_code_version
+      });
+    }
   } else if (msg.type === 'assistant') {
     if (cancelledTurn) return; // Silently drain until result
     // Assistant message with content - contains model and usage info

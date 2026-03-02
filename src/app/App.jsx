@@ -71,6 +71,11 @@ export default function App() {
       addMessage('status', 'Session started');
     });
 
+    ws.setHandler('session-reinit', (data) => {
+      const model = data?.model ? ` (${data.model})` : '';
+      addMessage('status', `Session ready${model}`);
+    });
+
     ws.setHandler('session-ended', (data) => {
       addMessage('status', `Claude session ended (code: ${data.code})`);
     });
