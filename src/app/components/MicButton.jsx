@@ -106,13 +106,16 @@ export default function MicButton({ isRecording, isProcessing, isSendMode, disab
         userSelect: 'none',
       }}
       className={`
-        w-20 h-20 rounded-full flex items-center justify-center
+        relative w-20 h-20 rounded-full flex items-center justify-center
         text-white shadow-lg transition-all duration-200
         disabled:opacity-40 disabled:cursor-not-allowed disabled:animate-none
         touch-none
         ${bgClass} ${extraClass}
       `}
     >
+      {isRecording && (
+        <span className="absolute -inset-2 rounded-full border-2 border-red-300/80 animate-ping pointer-events-none" />
+      )}
       <svg className="w-8 h-8" viewBox="0 0 24 24" fill="currentColor">
         {icon}
       </svg>

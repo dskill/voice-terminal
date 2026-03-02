@@ -3,7 +3,6 @@ import useWebSocket from './hooks/useWebSocket';
 import useSpeechRecognition from './hooks/useSpeechRecognition';
 import useTTS from './hooks/useTTS';
 import LoadingOverlay from './components/LoadingOverlay';
-import Header from './components/Header';
 import TranscriptArea from './components/TranscriptArea';
 import Controls from './components/Controls';
 import MicButton from './components/MicButton';
@@ -19,6 +18,9 @@ export default function App() {
   const [liveText, setLiveText] = useState('');
   const [inputText, setInputText] = useState('');
   const [showInput, setShowInput] = useState(false);
+  const [autoSend, setAutoSend] = useState(() => {
+    return localStorage.getItem('voice-terminal-auto-send') === '1';
+  });
   const [tmuxSessions, setTmuxSessions] = useState([]);
   const [showSessionMenu, setShowSessionMenu] = useState(false);
   const [activeTmuxSession, setActiveTmuxSession] = useState(() => {
@@ -230,9 +232,28 @@ export default function App() {
       }
 
       const text = await ws.sendAudioForSTT(audioBlob);
-      setInputText(text);
-      setShowInput(true);
-      setLiveText('Review or tap send');
+      if (autoSend) {
+        const finalText = (text || '').trim();
+        if (!finalText || finalText.length < 2) {
+          setShowInput(false);
+          setInputText('');
+          setLiveText('');
+          return;
+        }
+        setShowInput(false);
+        setInputText('');
+        setIsProcessing(true);
+        setLiveText('Sending to Claude...');
+        addMessage('user', finalText);
+        const finalCommand = activeTmuxSession
+          ? `this speech command is intended for use with tmux session ${activeTmuxSession}\n\n${finalText}`
+          : finalText;
+        ws.sendCommand(finalCommand);
+      } else {
+        setInputText(text);
+        setShowInput(true);
+        setLiveText('Review or tap send');
+      }
     } catch (err) {
       setLiveText(`Transcription failed: ${err.message || 'unknown error'}`);
       setShowInput(false);
@@ -240,7 +261,7 @@ export default function App() {
     } finally {
       setIsTranscribing(false);
     }
-  }, [speech, ws]);
+  }, [speech, ws, autoSend, addMessage, activeTmuxSession]);
 
   const toggleRecording = useCallback(() => {
     if (isProcessing || isTranscribing) return;
@@ -271,6 +292,11 @@ export default function App() {
       : text;
     ws.sendCommand(finalCommand);
   }, [inputText, addMessage, ws, activeTmuxSession]);
+
+  const toggleAutoSend = useCallback((enabled) => {
+    setAutoSend(enabled);
+    localStorage.setItem('voice-terminal-auto-send', enabled ? '1' : '0');
+  }, []);
 
   const cancelMessage = useCallback(() => {
     setShowInput(false);
@@ -346,19 +372,21 @@ export default function App() {
 
   return (
     <div className="h-dvh flex flex-col bg-slate-900 text-slate-100">
-      <Header />
+      <div className="flex items-center justify-center border-b border-slate-700/50 bg-slate-800/80 backdrop-blur-sm">
+        <Controls
+          isConnected={ws.isConnected}
+          claudeRunning={ws.claudeRunning}
+          onRestartSession={restartSession}
+          onRefresh={() => location.reload()}
+          autoSend={autoSend}
+          onToggleAutoSend={toggleAutoSend}
+        />
+      </div>
 
       <div className="flex-1 flex flex-col p-4 overflow-hidden min-h-0">
         <TranscriptArea messages={messages} streamingMessage={streamingMessage} />
 
         <div className="flex-shrink-0 flex flex-col items-center gap-3 pt-4 border-t border-slate-800/50 mt-4">
-          <Controls
-            isConnected={ws.isConnected}
-            claudeRunning={ws.claudeRunning}
-            onRestartSession={restartSession}
-            onRefresh={() => location.reload()}
-          />
-
           <div className="text-xs text-slate-500 text-center">
             Active tmux: {activeTmuxSession || 'none'}
           </div>
@@ -377,15 +405,30 @@ export default function App() {
             visible={showInput}
           />
 
-          <MicButton
-            isRecording={speech.isListening}
-            isProcessing={isProcessing}
-            isSendMode={showInput}
-            disabled={!ws.claudeRunning || isTranscribing}
-            onClick={showInput ? sendMessage : toggleRecording}
-            onCancel={cancelProcessing}
-            onLongPress={openSessionMenu}
-          />
+          <div className="flex items-center gap-4">
+            <button
+              onPointerDown={(e) => {
+                e.preventDefault();
+                openSessionMenu();
+              }}
+              className="w-12 h-12 rounded-full flex items-center justify-center bg-slate-800 border border-slate-600 text-slate-100 hover:bg-slate-700 transition-colors touch-none select-none"
+              title="Open tmux session selector"
+            >
+              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zm0 2v10h16V7H4zm2 2h6v2H6V9zm0 4h9v2H6v-2z" />
+              </svg>
+            </button>
+
+            <MicButton
+              isRecording={speech.isListening}
+              isProcessing={isProcessing}
+              isSendMode={showInput}
+              disabled={!ws.claudeRunning || isTranscribing}
+              onClick={showInput ? sendMessage : toggleRecording}
+              onCancel={cancelProcessing}
+              onLongPress={openSessionMenu}
+            />
+          </div>
         </div>
       </div>
 

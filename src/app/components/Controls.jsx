@@ -19,9 +19,11 @@ export default function Controls({
   claudeRunning,
   onRestartSession,
   onRefresh,
+  autoSend,
+  onToggleAutoSend,
 }) {
   return (
-    <div className="flex items-center justify-center gap-2 flex-wrap px-2 pb-2">
+    <div className="flex items-center justify-center gap-2 flex-wrap px-3 py-3">
       <StatusBadge label={`WS: ${isConnected ? 'On' : 'Off'}`} connected={isConnected} />
       <StatusBadge
         label={`Claude: ${claudeRunning ? 'On' : 'Off'}`}
@@ -42,6 +44,16 @@ export default function Controls({
       >
         Refresh
       </button>
+
+      <label className="flex items-center gap-1.5 px-2 py-0.5 rounded text-[0.65rem] bg-slate-700/50 text-slate-300 border border-slate-600/30 select-none">
+        <input
+          type="checkbox"
+          checked={autoSend}
+          onChange={(e) => onToggleAutoSend(e.target.checked)}
+          className="w-3 h-3 accent-emerald-500"
+        />
+        Auto-send
+      </label>
     </div>
   );
 }
