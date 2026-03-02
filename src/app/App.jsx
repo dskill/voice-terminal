@@ -421,6 +421,7 @@ export default function App() {
 
             <MicButton
               isRecording={speech.isListening}
+              audioLevel={speech.audioLevel}
               isProcessing={isProcessing}
               isSendMode={showInput}
               disabled={!ws.claudeRunning || isTranscribing}

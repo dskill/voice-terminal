@@ -1,6 +1,6 @@
 import React from 'react';
 
-export default function MicButton({ isRecording, isProcessing, isSendMode, disabled, onClick, onCancel, onLongPress }) {
+export default function MicButton({ isRecording, audioLevel = 0, isProcessing, isSendMode, disabled, onClick, onCancel, onLongPress }) {
   let bgClass = 'bg-gradient-to-br from-blue-500 to-blue-700 shadow-blue-500/30 animate-glow';
   let extraClass = '';
 
@@ -114,7 +114,22 @@ export default function MicButton({ isRecording, isProcessing, isSendMode, disab
       `}
     >
       {isRecording && (
-        <span className="absolute -inset-2 rounded-full border-2 border-red-300/80 animate-ping pointer-events-none" />
+        <>
+          <span className="absolute -inset-2 rounded-full border-2 border-red-300/80 animate-ping pointer-events-none" />
+          <div className="absolute -bottom-6 left-1/2 -translate-x-1/2 w-16 h-4 flex items-end justify-center gap-0.5 pointer-events-none">
+            {[0.25, 0.45, 0.7, 1, 0.7, 0.45, 0.25].map((scale, i) => {
+              const value = Math.max(0.12, Math.min(1, audioLevel * scale + 0.08));
+              const height = 2 + Math.round(value * 12);
+              return (
+                <span
+                  key={i}
+                  className="w-1 rounded-sm bg-red-300/90 transition-[height] duration-75"
+                  style={{ height: `${height}px` }}
+                />
+              );
+            })}
+          </div>
+        </>
       )}
       <svg className="w-8 h-8" viewBox="0 0 24 24" fill="currentColor">
         {icon}
