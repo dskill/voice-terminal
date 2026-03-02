@@ -93,8 +93,14 @@ export default function App() {
       setActiveTmuxSession(data.name);
       localStorage.setItem('voice-terminal-active-tmux', data.name);
       setLiveText(`Attached to tmux session ${data.name}`);
+      ws.setActiveTmuxSession(data.name);
       ws.listTmuxSessions();
       setShowSessionMenu(false);
+    });
+
+    ws.setHandler('tmux-session-selected', (data) => {
+      if (!data?.session) return;
+      setLiveText(`Attached to tmux session ${data.session}`);
     });
 
     ws.setHandler('tool-call', (data) => {
@@ -169,7 +175,7 @@ export default function App() {
     ws.setHandler('history-cleared', () => {
       // handled by local state clear
     });
-  }, [ws.setHandler, ws.listTmuxSessions, addMessage, tts.playAudio]);
+  }, [ws.setHandler, ws.listTmuxSessions, ws.setActiveTmuxSession, addMessage, tts.playAudio]);
 
   const requestWakeLock = useCallback(async () => {
     if (!('wakeLock' in navigator)) return;
@@ -337,12 +343,13 @@ export default function App() {
     if (next) {
       localStorage.setItem('voice-terminal-active-tmux', next);
       setLiveText(`Attached to tmux session ${next}`);
+      ws.setActiveTmuxSession(next);
     } else {
       localStorage.removeItem('voice-terminal-active-tmux');
       setLiveText('Detached from tmux session');
     }
     setShowSessionMenu(false);
-  }, []);
+  }, [ws]);
 
   const handleCreateClaudeSession = useCallback(() => {
     ws.createTmuxSession('claude');
@@ -353,6 +360,11 @@ export default function App() {
     ws.createTmuxSession('codex');
     setLiveText('Creating new Codex tmux session...');
   }, [ws]);
+
+  useEffect(() => {
+    if (!ws.isConnected || !activeTmuxSession) return;
+    ws.setActiveTmuxSession(activeTmuxSession);
+  }, [ws.isConnected, ws.setActiveTmuxSession, activeTmuxSession]);
 
   // ---- Spacebar shortcut ----
 

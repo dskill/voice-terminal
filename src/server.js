@@ -8,6 +8,13 @@ import { existsSync, writeFileSync, unlinkSync } from 'fs';
 import { createInterface } from 'readline';
 import { tmpdir } from 'os';
 import { loadTTSModel, isTTSReady, synthesize } from './tts.js';
+import {
+  tmuxSendInput,
+  tmuxReadSnapshot,
+  tmuxSetupReadStream,
+  tmuxReadStream,
+  tmuxSetupSessionLogging
+} from './tmux-broker.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -21,6 +28,7 @@ const publicPath = join(__dirname, '../public');
 const systemPromptPath = join(__dirname, '../system-prompt.md');
 const staticPath = existsSync(distPath) ? distPath : publicPath;
 console.log(`Serving static files from: ${staticPath}`);
+app.use(express.json({ limit: '2mb' }));
 app.use(express.static(staticPath));
 
 const server = createServer(app);
@@ -86,7 +94,61 @@ async function createTmuxSession(kind) {
     ? 'codex --sandbox danger-full-access --ask-for-approval never'
     : 'claude --dangerously-skip-permissions';
   await execFileAsync('tmux', ['new-session', '-d', '-s', sessionName, '-c', process.env.HOME, command]);
+  try {
+    await tmuxSetupSessionLogging(sessionName);
+  } catch (err) {
+    console.warn(`[tmux-broker] Failed to setup logging for ${sessionName}: ${err.message}`);
+  }
   return { name: sessionName, kind: safeKind, command };
+}
+
+function parseCursor(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const num = Number(value);
+  if (!Number.isInteger(num) || num < 0) {
+    throw new Error('cursor must be a non-negative integer');
+  }
+  return num;
+}
+
+async function handleTmuxBrokerSend(payload) {
+  const result = await tmuxSendInput(
+    payload.session,
+    payload.pane || null,
+    payload.text ?? '',
+    payload.pressEnter !== false
+  );
+  return result;
+}
+
+async function handleTmuxBrokerSnapshot(payload) {
+  const result = await tmuxReadSnapshot(
+    payload.session,
+    payload.pane || null,
+    payload.lines
+  );
+  return result;
+}
+
+async function handleTmuxBrokerStream(payload) {
+  const cursor = parseCursor(payload.cursor);
+  const result = await tmuxReadStream(
+    payload.session,
+    payload.pane || null,
+    cursor
+  );
+  return result;
+}
+
+async function handleTmuxBrokerSelect(payload) {
+  if (!payload.session || !String(payload.session).trim()) {
+    throw new Error('session is required');
+  }
+  const streams = await tmuxSetupSessionLogging(payload.session);
+  return {
+    session: payload.session,
+    streamCount: streams.length
+  };
 }
 
 function startSTTWorker() {
@@ -548,6 +610,53 @@ async function synthesizeAndBroadcastAudio(text, messageId = null) {
 }
 
 // ============================================
+// HTTP API: TMux Broker
+// ============================================
+
+function sendApiError(res, error) {
+  res.status(400).json({
+    ok: false,
+    error: error?.message || String(error)
+  });
+}
+
+app.post('/api/tmux/select-session', async (req, res) => {
+  try {
+    const result = await handleTmuxBrokerSelect(req.body || {});
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    sendApiError(res, err);
+  }
+});
+
+app.post('/api/tmux/send-input', async (req, res) => {
+  try {
+    const result = await handleTmuxBrokerSend(req.body || {});
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    sendApiError(res, err);
+  }
+});
+
+app.post('/api/tmux/read-snapshot', async (req, res) => {
+  try {
+    const result = await handleTmuxBrokerSnapshot(req.body || {});
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    sendApiError(res, err);
+  }
+});
+
+app.post('/api/tmux/read-stream', async (req, res) => {
+  try {
+    const result = await handleTmuxBrokerStream(req.body || {});
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    sendApiError(res, err);
+  }
+});
+
+// ============================================
 // WebSocket Handlers
 // ============================================
 
@@ -650,6 +759,90 @@ wss.on('connection', (ws) => {
             ws.send(JSON.stringify({
               type: 'error',
               message: `Failed to create tmux session: ${err.message}`
+            }));
+          });
+
+      } else if (message.type === 'select-tmux-session') {
+        handleTmuxBrokerSelect(message)
+          .then((result) => {
+            ws.send(JSON.stringify({
+              type: 'tmux-session-selected',
+              session: result.session,
+              streamCount: result.streamCount
+            }));
+          })
+          .catch((err) => {
+            ws.send(JSON.stringify({
+              type: 'error',
+              message: `Failed to select tmux session: ${err.message}`
+            }));
+          });
+
+      } else if (message.type === 'tmux-send-input') {
+        handleTmuxBrokerSend(message)
+          .then((result) => {
+            ws.send(JSON.stringify({
+              type: 'tmux-input-sent',
+              requestId: message.requestId || null,
+              ...result
+            }));
+          })
+          .catch((err) => {
+            ws.send(JSON.stringify({
+              type: 'tmux-broker-error',
+              requestId: message.requestId || null,
+              message: err.message
+            }));
+          });
+
+      } else if (message.type === 'tmux-read-snapshot') {
+        handleTmuxBrokerSnapshot(message)
+          .then((result) => {
+            ws.send(JSON.stringify({
+              type: 'tmux-output-snapshot',
+              requestId: message.requestId || null,
+              ...result
+            }));
+          })
+          .catch((err) => {
+            ws.send(JSON.stringify({
+              type: 'tmux-broker-error',
+              requestId: message.requestId || null,
+              message: err.message
+            }));
+          });
+
+      } else if (message.type === 'tmux-read-stream') {
+        handleTmuxBrokerStream(message)
+          .then((result) => {
+            ws.send(JSON.stringify({
+              type: 'tmux-output-stream',
+              requestId: message.requestId || null,
+              ...result
+            }));
+          })
+          .catch((err) => {
+            ws.send(JSON.stringify({
+              type: 'tmux-broker-error',
+              requestId: message.requestId || null,
+              message: err.message
+            }));
+          });
+
+      } else if (message.type === 'tmux-setup-stream') {
+        tmuxSetupReadStream(message.session, message.pane || null)
+          .then((result) => {
+            ws.send(JSON.stringify({
+              type: 'tmux-stream-ready',
+              requestId: message.requestId || null,
+              ...result
+            }));
+          })
+          .catch((err) => {
+            ws.send(JSON.stringify({
+              type: 'tmux-broker-error',
+              requestId: message.requestId || null,
+              message: err.message
             }));
           });
 
