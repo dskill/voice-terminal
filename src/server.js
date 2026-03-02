@@ -4,7 +4,7 @@ import express from 'express';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { existsSync, readFileSync, unlinkSync } from 'fs';
+import { existsSync, writeFileSync, unlinkSync } from 'fs';
 import { createInterface } from 'readline';
 import { tmpdir } from 'os';
 import { loadTTSModel, isTTSReady, synthesize } from './tts.js';
@@ -40,6 +40,146 @@ let conversationHistory = []; // Store conversation for reconnecting clients
 let sessionMetadata = {}; // Store session info from init message
 let currentTurnEvents = []; // Collect all events for current turn
 let cancelledTurn = false; // Soft-cancel: ignore remaining output for this turn
+let sttWorkerProcess = null;
+let sttReady = false;
+let sttPending = new Map();
+
+function startSTTWorker() {
+  if (sttWorkerProcess) {
+    return;
+  }
+
+  const workerPath = join(__dirname, 'stt_worker.py');
+  const modelName = process.env.STT_MODEL || 'distil-small.en';
+  const computeType = process.env.STT_COMPUTE_TYPE || 'int8';
+
+  console.log(`[STT] Starting worker with model=${modelName}, compute_type=${computeType}`);
+  sttWorkerProcess = spawn('python3', [workerPath], {
+    cwd: process.env.HOME,
+    env: {
+      ...process.env,
+      STT_MODEL: modelName,
+      STT_COMPUTE_TYPE: computeType
+    },
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
+
+  const rl = createInterface({ input: sttWorkerProcess.stdout });
+  rl.on('line', (line) => {
+    if (!line.trim()) return;
+    let msg;
+    try {
+      msg = JSON.parse(line);
+    } catch {
+      console.log('[STT] Non-JSON output:', line);
+      return;
+    }
+
+    if (msg.type === 'ready') {
+      sttReady = !msg.error;
+      if (msg.error) {
+        console.error(`[STT] Worker failed: ${msg.error}`);
+      } else {
+        console.log(`[STT] Worker ready (${msg.model || 'unknown model'})`);
+      }
+      return;
+    }
+
+    if (!msg.id) return;
+    const pending = sttPending.get(msg.id);
+    if (!pending) return;
+
+    clearTimeout(pending.timeout);
+    sttPending.delete(msg.id);
+
+    try {
+      unlinkSync(pending.audioPath);
+    } catch {
+      // Ignore cleanup errors
+    }
+
+    if (msg.error) {
+      pending.reject(new Error(msg.error));
+    } else {
+      pending.resolve((msg.text || '').trim());
+    }
+  });
+
+  sttWorkerProcess.stderr.on('data', (data) => {
+    console.log('[STT] stderr:', data.toString().trim());
+  });
+
+  sttWorkerProcess.on('close', (code) => {
+    console.log(`[STT] Worker exited with code ${code}`);
+    sttWorkerProcess = null;
+    sttReady = false;
+    for (const [id, pending] of sttPending.entries()) {
+      clearTimeout(pending.timeout);
+      try {
+        unlinkSync(pending.audioPath);
+      } catch {
+        // Ignore cleanup errors
+      }
+      pending.reject(new Error('STT worker exited'));
+      sttPending.delete(id);
+    }
+  });
+
+  sttWorkerProcess.on('error', (err) => {
+    console.error('[STT] Worker failed to start:', err);
+    sttWorkerProcess = null;
+    sttReady = false;
+  });
+}
+
+function stopSTTWorker() {
+  if (!sttWorkerProcess) return;
+  console.log('[STT] Stopping worker...');
+  sttWorkerProcess.kill('SIGTERM');
+  sttWorkerProcess = null;
+  sttReady = false;
+}
+
+function mimeTypeToExtension(mimeType) {
+  if (!mimeType) return 'webm';
+  if (mimeType.includes('webm')) return 'webm';
+  if (mimeType.includes('ogg')) return 'ogg';
+  if (mimeType.includes('wav')) return 'wav';
+  if (mimeType.includes('mp4') || mimeType.includes('m4a')) return 'm4a';
+  return 'webm';
+}
+
+function transcribeAudioBuffer(audioBuffer, mimeType) {
+  if (!sttWorkerProcess || !sttReady) {
+    return Promise.reject(new Error('STT worker not ready'));
+  }
+
+  const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const ext = mimeTypeToExtension(mimeType);
+  const audioPath = join(tmpdir(), `voice-terminal-stt-${process.pid}-${requestId}.${ext}`);
+  writeFileSync(audioPath, audioBuffer);
+
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      sttPending.delete(requestId);
+      try {
+        unlinkSync(audioPath);
+      } catch {
+        // Ignore cleanup errors
+      }
+      reject(new Error('STT request timed out'));
+    }, 60000);
+
+    sttPending.set(requestId, {
+      resolve,
+      reject,
+      timeout,
+      audioPath
+    });
+
+    sttWorkerProcess.stdin.write(`${JSON.stringify({ id: requestId, audioPath })}\n`);
+  });
+}
 
 function startClaudeSession() {
   if (claudeProcess) {
@@ -397,6 +537,43 @@ wss.on('connection', (ws) => {
             message: result.error
           }));
         }
+      } else if (message.type === 'transcribe-audio') {
+        const { requestId, audioBase64, mimeType } = message;
+
+        if (!requestId || !audioBase64) {
+          ws.send(JSON.stringify({
+            type: 'stt-result',
+            requestId,
+            error: 'Missing requestId or audio payload'
+          }));
+          return;
+        }
+
+        if (!sttReady) {
+          ws.send(JSON.stringify({
+            type: 'stt-result',
+            requestId,
+            error: 'STT worker not ready'
+          }));
+          return;
+        }
+
+        const audioBuffer = Buffer.from(audioBase64, 'base64');
+        transcribeAudioBuffer(audioBuffer, mimeType)
+          .then((text) => {
+            ws.send(JSON.stringify({
+              type: 'stt-result',
+              requestId,
+              text
+            }));
+          })
+          .catch((err) => {
+            ws.send(JSON.stringify({
+              type: 'stt-result',
+              requestId,
+              error: err.message || 'Failed to transcribe audio'
+            }));
+          });
       }
     } catch (err) {
       ws.send(JSON.stringify({
@@ -423,6 +600,7 @@ server.listen(PORT, () => {
 
   // Auto-start Claude session
   startClaudeSession();
+  startSTTWorker();
 
   // Fire-and-forget TTS model loading
   loadTTSModel();
@@ -432,11 +610,13 @@ server.listen(PORT, () => {
 process.on('SIGTERM', () => {
   console.log('Shutting down...');
   stopClaudeSession();
+  stopSTTWorker();
   process.exit(0);
 });
 
 process.on('SIGINT', () => {
   console.log('Shutting down...');
   stopClaudeSession();
+  stopSTTWorker();
   process.exit(0);
 });

@@ -14,6 +14,7 @@ export default function App() {
   const [messages, setMessages] = useState([]);
   const [streamingMessage, setStreamingMessage] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
   const [liveText, setLiveText] = useState('');
   const [inputText, setInputText] = useState('');
   const [showInput, setShowInput] = useState(false);
@@ -131,40 +132,55 @@ export default function App() {
 
   // ---- Recording flow ----
 
-  const startRecording = useCallback(() => {
-    if (isProcessing || speech.isListening) return;
+  const startRecording = useCallback(async () => {
+    if (isProcessing || isTranscribing || speech.isListening) return;
     if (!ws.claudeRunning) {
       setLiveText('Start Claude session first');
       return;
     }
     tts.unlock(); // iOS gesture unlock
-    speech.startListening();
-    setLiveText('Listening...');
-  }, [isProcessing, speech, ws.claudeRunning, tts]);
+    const started = await speech.startListening();
+    if (started) {
+      setLiveText('Listening...');
+    } else {
+      setLiveText('Unable to start microphone');
+    }
+  }, [isProcessing, isTranscribing, speech, ws.claudeRunning, tts]);
 
-  const stopRecording = useCallback(() => {
+  const stopRecording = useCallback(async () => {
     if (!speech.isListening) return;
-    const text = speech.stopListening();
-    setInputText(text);
-    setShowInput(true);
-    setLiveText('Review or tap send');
-  }, [speech]);
+    setIsTranscribing(true);
+    setLiveText('Transcribing on server...');
+
+    try {
+      const audioBlob = await speech.stopListening();
+      if (!audioBlob || audioBlob.size === 0) {
+        setLiveText('No audio captured');
+        setShowInput(false);
+        return;
+      }
+
+      const text = await ws.sendAudioForSTT(audioBlob);
+      setInputText(text);
+      setShowInput(true);
+      setLiveText('Review or tap send');
+    } catch (err) {
+      setLiveText(`Transcription failed: ${err.message || 'unknown error'}`);
+      setShowInput(false);
+      setInputText('');
+    } finally {
+      setIsTranscribing(false);
+    }
+  }, [speech, ws]);
 
   const toggleRecording = useCallback(() => {
-    if (isProcessing) return;
+    if (isProcessing || isTranscribing) return;
     if (speech.isListening) {
       stopRecording();
     } else {
       startRecording();
     }
-  }, [isProcessing, speech.isListening, startRecording, stopRecording]);
-
-  // Update input text as speech transcript changes while recording
-  useEffect(() => {
-    if (speech.isListening && speech.transcript) {
-      setLiveText(speech.transcript);
-    }
-  }, [speech.isListening, speech.transcript]);
+  }, [isProcessing, isTranscribing, speech.isListening, startRecording, stopRecording]);
 
   // ---- Send / Cancel ----
 
@@ -215,7 +231,7 @@ export default function App() {
 
   useEffect(() => {
     function onKeyDown(e) {
-      if (e.key === ' ' && !isProcessing && !showInput) {
+      if (e.key === ' ' && !isProcessing && !isTranscribing && !showInput) {
         const tag = document.activeElement?.tagName;
         if (tag === 'INPUT' || tag === 'TEXTAREA') return;
         e.preventDefault();
@@ -224,7 +240,7 @@ export default function App() {
     }
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [isProcessing, showInput, toggleRecording]);
+  }, [isProcessing, isTranscribing, showInput, toggleRecording]);
 
   // ---- Render ----
 
@@ -268,7 +284,7 @@ export default function App() {
             isRecording={speech.isListening}
             isProcessing={isProcessing}
             isSendMode={showInput}
-            disabled={!ws.claudeRunning}
+            disabled={!ws.claudeRunning || isTranscribing}
             onClick={showInput ? sendMessage : toggleRecording}
             onCancel={cancelProcessing}
           />

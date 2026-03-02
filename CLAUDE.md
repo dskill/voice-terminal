@@ -12,13 +12,14 @@ The app is functional but actively being refined. Recent focus has been on UI/UX
 Browser (iPhone/Desktop)
 ├── index.html          - UI layout, CSS
 ├── main.js             - App logic, WebSocket client
-│   ├── Browser Speech Recognition API (continuous mode)
+│   ├── MediaRecorder audio capture
 │   ├── Browser SpeechSynthesis API (TTS)
 │   └── WebSocket connection to server
 │
 Server (Node.js on exe.dev VM)
 ├── server.js           - WebSocket server
 │   ├── Spawns `claude --print --output-format stream-json`
+│   ├── Spawns Python `faster-whisper` STT worker
 │   ├── Maintains persistent Claude Code session
 │   ├── Stores conversation history for reconnects
 │   └── Extracts [SPOKEN: ...] summary from responses
@@ -34,8 +35,8 @@ Server (Node.js on exe.dev VM)
 
 1. User taps "Start Voice Terminal" - requests mic permission, connects WebSocket
 2. Server auto-starts Claude Code session with `--dangerously-skip-permissions`
-3. User taps mic button - starts browser speech recognition (continuous mode)
-4. User taps again to stop - transcription appears in editable text field
+3. User taps mic button - starts browser audio capture (MediaRecorder)
+4. User taps again to stop - audio sent to server STT, transcription appears in editable text field
 5. User can edit, then tap Send (or Enter) or Cancel (or Escape)
 6. Server receives transcript, sends to Claude via stream-json input
 7. Claude responds with `[SPOKEN: summary]` at the end
@@ -84,7 +85,7 @@ npm install
 tmux new-session -d -s voice-terminal -c /path/to/voice-terminal 'npm run dev'
 ```
 
-**Important:** The server spawns a Claude Code subprocess. If you run `npm run dev` directly from within a Claude Code session, the subprocess will fail because Claude Code sets a `CLAUDECODE` environment variable to prevent nested sessions. Running in tmux gives the server a clean shell environment without that variable.
+**Important:** The server spawns Claude Code and a Python STT worker subprocess. If you run `npm run dev` directly from within a Claude Code session, the Claude subprocess will fail because Claude Code sets a `CLAUDECODE` environment variable to prevent nested sessions. Running in tmux gives the server a clean shell environment without that variable.
 
 To view logs: `tmux attach -t voice-terminal`
 To restart: `tmux kill-session -t voice-terminal` then re-run the command above.

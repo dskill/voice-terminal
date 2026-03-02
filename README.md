@@ -6,7 +6,7 @@ Speak commands, see them transcribed, edit if needed, and hear Claude's response
 
 ## Features
 
-- **Tap-to-talk voice input** - Browser native speech recognition (continuous until you tap to stop)
+- **Tap-to-talk voice input** - Browser audio capture with server-side `faster-whisper` STT
 - **Edit before send** - Review and edit transcription before sending to Claude
 - **Persistent sessions** - Claude Code session survives page refreshes/reconnects
 - **Text-to-speech** - Responses include a spoken summary read aloud
@@ -15,8 +15,12 @@ Speak commands, see them transcribed, edit if needed, and hear Claude's response
 ## Setup
 
 ```bash
+cd /path/to/voice-terminal
 npm install
-tmux new-session -d -s voice-terminal -c /path/to/voice-terminal 'npm run dev'
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements-stt.txt
+tmux new-session -d -s voice-terminal -c /path/to/voice-terminal '. .venv/bin/activate && npm run dev'
 ```
 
 **Note:** The server spawns a Claude Code subprocess. If you run `npm run dev` directly from within a Claude Code session, the subprocess will fail because Claude Code sets a `CLAUDECODE` environment variable to prevent nested sessions. Running in tmux gives the server a clean shell environment without that variable.
@@ -46,5 +50,16 @@ Access at `https://your-vm.exe.xyz:3456/`
 ## Requirements
 
 - Node.js 18+
+- Python 3.9+
+- `venv` module available (`python3 -m venv`)
 - Claude Code CLI installed and authenticated
-- Modern browser with Speech Recognition API (Chrome recommended, Safari limited)
+- Modern browser with `MediaRecorder` support
+
+## Server STT
+
+- Speech-to-text now runs on the server via `faster-whisper` (CPU).
+- Default model: `distil-small.en`
+- Optional env vars:
+  - `STT_MODEL` (example: `base.en`, `tiny.en`)
+  - `STT_COMPUTE_TYPE` (default: `int8`)
+  - `STT_CPU_THREADS` (default: `4`)
