@@ -10,7 +10,7 @@ export default function TranscriptArea({ messages, streamingMessage }) {
         areaRef.current.scrollTop = areaRef.current.scrollHeight;
       });
     }
-  }, [messages, streamingMessage?.text]);
+  }, [messages, streamingMessage?.text, streamingMessage?.toolCalls?.length]);
 
   return (
     <div

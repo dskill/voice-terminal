@@ -27,8 +27,9 @@ Server (Node.js on exe.dev VM)
 
 ## Key Files
 
-- `public/index.html` - All CSS inline in `<style>`, HTML structure
-- `public/main.js` - Single file with all client logic
+- `src/app/App.jsx` - Main client app flow
+- `src/app/components/Controls.jsx` - Session/restart controls
+- `src/app/hooks/useSpeechRecognition.js` - MediaRecorder audio capture
 - `src/server.js` - WebSocket server, Claude Code process management
 
 ## How It Works
@@ -49,8 +50,7 @@ Server (Node.js on exe.dev VM)
 - **Transcript Area** - Scrollable conversation history
 - **Controls** (fixed at bottom):
   - Status indicators (WS, Claude)
-  - Start/Stop session button
-  - Clear history button
+  - Restart session button
   - Refresh button
   - Live transcript display
   - Editable input area (hidden until recording stops)
@@ -65,24 +65,27 @@ You are being controlled via a voice interface. Be concise. After completing req
 
 ## Recent Changes
 
-- Switched from WebGPU Whisper/TTS to browser-native APIs (simpler, faster)
+- Switched STT from browser-native recognition to server-side `faster-whisper`
 - Single session model (no session picker)
 - Edit-before-send UI (fix garbled transcriptions, or type instead)
 - Controls moved to fixed bottom panel
 - Proper flexbox layout for mobile (100dvh, controls don't overlap history)
-- Clear history and refresh buttons for testing
+- Restart and refresh buttons for testing
 
 ## Known Issues / TODOs
 
 - History can still get covered by input area when typing long messages
-- Speech recognition quality varies by browser/device
+- Need more long-session testing for reconnect/audio replay edge cases
 - No way to interrupt Claude while it's responding
 
 ## Running
 
 ```bash
 npm install
-tmux new-session -d -s voice-terminal -c /path/to/voice-terminal 'npm run dev'
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements-stt.txt
+tmux new-session -d -s voice-terminal -c /path/to/voice-terminal '. .venv/bin/activate && npm run dev'
 ```
 
 **Important:** The server spawns Claude Code and a Python STT worker subprocess. If you run `npm run dev` directly from within a Claude Code session, the Claude subprocess will fail because Claude Code sets a `CLAUDECODE` environment variable to prevent nested sessions. Running in tmux gives the server a clean shell environment without that variable.
@@ -95,6 +98,6 @@ Access at `https://your-vm.exe.xyz:3456/`
 ## Development Tips
 
 - Use Refresh button in the app to test changes without restarting server
-- Clear button resets both client UI and server conversation history
+- Restart button resets Claude session and in-memory conversation history
 - Server auto-starts Claude session on startup
-- Check browser console for speech recognition errors
+- Check browser console for capture/WS audio errors

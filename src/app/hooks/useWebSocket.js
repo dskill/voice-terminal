@@ -3,7 +3,6 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 export default function useWebSocket() {
   const [isConnected, setIsConnected] = useState(false);
   const [claudeRunning, setClaudeRunning] = useState(false);
-  const [currentModel, setCurrentModel] = useState('');
   const wsRef = useRef(null);
   const handlersRef = useRef({});
   const reconnectTimer = useRef(null);
@@ -57,7 +56,6 @@ export default function useWebSocket() {
         if (data.type === 'session-status') {
           setClaudeRunning(data.running);
         } else if (data.type === 'session-init') {
-          setCurrentModel(data.model || '');
           setClaudeRunning(true);
         } else if (data.type === 'session-ended') {
           setClaudeRunning(false);
@@ -95,6 +93,7 @@ export default function useWebSocket() {
 
   const startSession = useCallback(() => send('start-session'), [send]);
   const stopSession = useCallback(() => send('stop-session'), [send]);
+  const restartSession = useCallback(() => send('restart-session'), [send]);
   const sendCommand = useCallback((transcript) => send('voice-command', { transcript }), [send]);
   const sendAudioForSTT = useCallback(async (blob) => {
     const requestId = (globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -140,12 +139,11 @@ export default function useWebSocket() {
   return {
     isConnected,
     claudeRunning,
-    currentModel,
-    setCurrentModel,
     send,
     setHandler,
     startSession,
     stopSession,
+    restartSession,
     sendCommand,
     sendAudioForSTT,
     cancelRequest,

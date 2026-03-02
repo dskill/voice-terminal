@@ -40,6 +40,9 @@ let conversationHistory = []; // Store conversation for reconnecting clients
 let sessionMetadata = {}; // Store session info from init message
 let currentTurnEvents = []; // Collect all events for current turn
 let cancelledTurn = false; // Soft-cancel: ignore remaining output for this turn
+let currentTurnToolCalls = [];
+let inFlightTurn = null;
+let nextMessageId = 1;
 let sttWorkerProcess = null;
 let sttReady = false;
 let sttPending = new Map();
@@ -189,6 +192,9 @@ function startClaudeSession() {
 
   // Clear history when starting new session
   conversationHistory = [];
+  currentTurnToolCalls = [];
+  inFlightTurn = null;
+  nextMessageId = 1;
 
   console.log('Starting Claude session with stream-json mode...');
 
@@ -264,6 +270,8 @@ function stopClaudeSession() {
   claudeProcess = null;
   claudeReady = false;
   conversationHistory = [];
+  currentTurnToolCalls = [];
+  inFlightTurn = null;
 }
 
 function handleClaudeMessage(msg) {
@@ -298,6 +306,10 @@ function handleClaudeMessage(msg) {
         } else if (block.type === 'tool_use') {
           // Tool call - broadcast it
           console.log('Tool call:', block.name, JSON.stringify(block.input).slice(0, 100));
+          currentTurnToolCalls.push({ toolName: block.name, input: block.input });
+          if (inFlightTurn) {
+            inFlightTurn.toolCalls.push({ toolName: block.name, input: block.input });
+          }
           broadcastToClients({
             type: 'tool-call',
             toolName: block.name,
@@ -317,6 +329,9 @@ function handleClaudeMessage(msg) {
     const event = msg.event;
     if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
       responseBuffer += event.delta.text;
+      if (inFlightTurn) {
+        inFlightTurn.partialText += event.delta.text;
+      }
       broadcastToClients({
         type: 'partial',
         text: event.delta.text
@@ -330,6 +345,8 @@ function handleClaudeMessage(msg) {
 
     if (wasCancelled) {
       responseBuffer = '';
+      currentTurnToolCalls = [];
+      inFlightTurn = null;
       console.log('Cancelled turn finished draining, session ready for next message');
       return;
     }
@@ -358,25 +375,32 @@ function handleClaudeMessage(msg) {
     }));
 
     // Store in history
-    conversationHistory.push({
+    const assistantMessage = {
+      id: nextMessageId++,
       type: 'assistant',
       content: fullResponse,
       spokenSummary,
+      toolCalls: currentTurnToolCalls,
+      spokenDelivered: !spokenSummary,
       metadata,
       timestamp: Date.now()
-    });
+    };
+    conversationHistory.push(assistantMessage);
+    currentTurnToolCalls = [];
+    inFlightTurn = null;
 
     broadcastToClients({
       type: 'response',
       fullResponse,
       spokenSummary,
+      toolCalls: assistantMessage.toolCalls,
       model: sessionMetadata.model,
       metadata
     });
 
     // Synthesize TTS audio asynchronously
-    if (spokenSummary && isTTSReady()) {
-      synthesizeAndBroadcastAudio(spokenSummary);
+    if (spokenSummary && isTTSReady() && connectedClients.size > 0) {
+      synthesizeAndBroadcastAudio(spokenSummary, assistantMessage.id);
     }
   } else if (msg.type === 'error') {
     broadcastToClients({
@@ -412,6 +436,13 @@ function sendToClaud(userMessage) {
 
   cancelledTurn = false;
   responseBuffer = '';
+  currentTurnToolCalls = [];
+  inFlightTurn = {
+    userMessage,
+    startedAt: Date.now(),
+    partialText: '',
+    toolCalls: []
+  };
   claudeProcess.stdin.write(JSON.stringify(message) + '\n');
 
   return { success: true };
@@ -426,8 +457,12 @@ function broadcastToClients(message) {
   }
 }
 
-async function synthesizeAndBroadcastAudio(text) {
+async function synthesizeAndBroadcastAudio(text, messageId = null) {
   try {
+    if (connectedClients.size === 0) {
+      return;
+    }
+
     console.log(`[TTS] Synthesizing: "${text.slice(0, 80)}..."`);
     const { audio, samplingRate } = await synthesize(text);
     console.log(`[TTS] Done: ${audio.length} samples @ ${samplingRate}Hz`);
@@ -437,9 +472,18 @@ async function synthesizeAndBroadcastAudio(text) {
 
     // Send raw PCM as binary
     const buffer = Buffer.from(audio.buffer);
+    let delivered = 0;
     for (const client of connectedClients) {
       if (client.readyState === 1) {
         client.send(buffer);
+        delivered += 1;
+      }
+    }
+
+    if (delivered > 0 && messageId != null) {
+      const msg = conversationHistory.find((m) => m.id === messageId);
+      if (msg) {
+        msg.spokenDelivered = true;
       }
     }
   } catch (err) {
@@ -488,8 +532,16 @@ wss.on('connection', (ws) => {
         // Send conversation history to reconnecting client
         ws.send(JSON.stringify({
           type: 'history',
-          messages: conversationHistory
+          messages: conversationHistory,
+          inFlightTurn
         }));
+
+        const pendingSpeech = conversationHistory.filter(
+          (m) => m.type === 'assistant' && m.spokenSummary && !m.spokenDelivered
+        );
+        for (const pending of pendingSpeech) {
+          synthesizeAndBroadcastAudio(pending.spokenSummary, pending.id);
+        }
 
       } else if (message.type === 'clear-history') {
         // Clear conversation history
@@ -506,12 +558,22 @@ wss.on('connection', (ws) => {
           success: interrupted
         });
 
+      } else if (message.type === 'restart-session') {
+        stopClaudeSession();
+        startClaudeSession();
+        ws.send(JSON.stringify({
+          type: 'session-status',
+          running: claudeReady,
+          hasProcess: !!claudeProcess
+        }));
+
       } else if (message.type === 'voice-command') {
         const transcript = message.transcript;
         console.log(`Voice command: "${transcript}"`);
 
         // Store user message in history
         conversationHistory.push({
+          id: nextMessageId++,
           type: 'user',
           content: transcript,
           timestamp: Date.now()

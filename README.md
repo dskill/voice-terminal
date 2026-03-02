@@ -40,12 +40,18 @@ Access at `https://your-vm.exe.xyz:3456/`
 
 ## Controls
 
-- **Start/Stop** - Toggle Claude Code session
-- **Clear** - Clear conversation history (client and server)
+- **Restart** - Restart Claude session and reset in-memory conversation state
 - **Refresh** - Reload the page (useful for testing changes)
 - **Cancel** - Discard current transcription without sending
 - **Spacebar** - Toggle recording (desktop)
 - **Escape** - Cancel current transcription
+
+## Reconnect behavior
+
+- Server keeps running if you close the web app.
+- On reconnect/refresh, history is restored from server memory.
+- If a response is still in progress, in-flight text/tool activity resumes in the UI.
+- If spoken summary audio was missed while disconnected, it is replayed after reconnect.
 
 ## Requirements
 

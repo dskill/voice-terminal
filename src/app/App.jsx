@@ -24,6 +24,7 @@ export default function App() {
   const speech = useSpeechRecognition();
   const tts = useTTS();
   const ttsMetaRef = useRef(null);
+  const wakeLockRef = useRef(null);
 
   // ---- WebSocket message handlers ----
 
@@ -39,13 +40,28 @@ export default function App() {
           content: msg.content,
           spokenSummary: msg.spokenSummary,
           metadata: msg.metadata,
+          toolCalls: msg.toolCalls,
         }));
         setMessages(restored);
+      } else {
+        setMessages([]);
+      }
+
+      if (data.inFlightTurn) {
+        setStreamingMessage({
+          text: data.inFlightTurn.partialText || '',
+          toolCalls: data.inFlightTurn.toolCalls || [],
+        });
+        setIsProcessing(true);
+        setLiveText('Thinking...');
+      } else {
+        setStreamingMessage(null);
+        setIsProcessing(false);
       }
     });
 
     ws.setHandler('session-init', (data) => {
-      addMessage('status', `Session started (${formatModelName(data.model || '')})`);
+      addMessage('status', 'Session started');
     });
 
     ws.setHandler('session-ended', (data) => {
@@ -78,7 +94,7 @@ export default function App() {
     ws.setHandler('response', (data) => {
       // Finalize streaming message into a regular message
       setStreamingMessage((prev) => {
-        const toolCalls = prev?.toolCalls || [];
+        const toolCalls = prev?.toolCalls || data.toolCalls || [];
         addMessage('assistant', data.fullResponse, data.spokenSummary, data.metadata, toolCalls);
         return null;
       });
@@ -129,6 +145,41 @@ export default function App() {
       // handled by local state clear
     });
   }, [ws.setHandler, addMessage, tts.playAudio]);
+
+  const requestWakeLock = useCallback(async () => {
+    if (!('wakeLock' in navigator)) return;
+    try {
+      if (!wakeLockRef.current) {
+        wakeLockRef.current = await navigator.wakeLock.request('screen');
+        wakeLockRef.current.addEventListener('release', () => {
+          wakeLockRef.current = null;
+        });
+      }
+    } catch (e) {
+      // Ignore wake lock failures (unsupported/browser policy)
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!initialized) return;
+
+    requestWakeLock();
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        requestWakeLock();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      if (wakeLockRef.current) {
+        wakeLockRef.current.release().catch(() => {});
+        wakeLockRef.current = null;
+      }
+    };
+  }, [initialized, requestWakeLock]);
 
   // ---- Recording flow ----
 
@@ -213,19 +264,15 @@ export default function App() {
 
   // ---- Session controls ----
 
-  const toggleSession = useCallback(() => {
-    if (ws.claudeRunning) {
-      ws.stopSession();
-    } else {
-      ws.startSession();
-    }
-  }, [ws]);
-
-  const handleClearHistory = useCallback(() => {
-    ws.clearHistory();
+  const restartSession = useCallback(() => {
+    ws.restartSession();
     setMessages([]);
-    addMessage('status', 'History cleared.');
-  }, [ws, addMessage]);
+    setStreamingMessage(null);
+    setShowInput(false);
+    setInputText('');
+    setIsProcessing(false);
+    setLiveText('Restarting Claude session...');
+  }, [ws]);
 
   // ---- Spacebar shortcut ----
 
@@ -259,10 +306,8 @@ export default function App() {
           <Controls
             isConnected={ws.isConnected}
             claudeRunning={ws.claudeRunning}
-            currentModel={ws.currentModel}
             contextPercent={contextPercent}
-            onToggleSession={toggleSession}
-            onClearHistory={handleClearHistory}
+            onRestartSession={restartSession}
             onRefresh={() => location.reload()}
           />
 
@@ -292,17 +337,4 @@ export default function App() {
       </div>
     </div>
   );
-}
-
-function formatModelName(model) {
-  if (!model) return 'Unknown';
-  const match = model.match(/(opus|sonnet|haiku)-(\d+)-(\d+)/);
-  if (match) {
-    const name = match[1].charAt(0).toUpperCase() + match[1].slice(1);
-    return `${name} ${match[2]}.${match[3]}`;
-  }
-  if (model.includes('opus')) return 'Opus';
-  if (model.includes('sonnet')) return 'Sonnet';
-  if (model.includes('haiku')) return 'Haiku';
-  return model;
 }
