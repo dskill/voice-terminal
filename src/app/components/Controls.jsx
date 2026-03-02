@@ -14,25 +14,9 @@ function StatusBadge({ label, connected }) {
   );
 }
 
-function ContextBar({ percent }) {
-  let fillColor = 'bg-emerald-500';
-  if (percent >= 80) fillColor = 'bg-red-500';
-  else if (percent >= 60) fillColor = 'bg-amber-500';
-
-  return (
-    <div className="w-14 h-1.5 bg-slate-700 rounded-full overflow-hidden" title={`Context: ${percent}%`}>
-      <div
-        className={`h-full ${fillColor} transition-all duration-300`}
-        style={{ width: `${percent}%` }}
-      />
-    </div>
-  );
-}
-
 export default function Controls({
   isConnected,
   claudeRunning,
-  contextPercent,
   onRestartSession,
   onRefresh,
 }) {
@@ -58,8 +42,6 @@ export default function Controls({
       >
         Refresh
       </button>
-
-      <ContextBar percent={contextPercent} />
     </div>
   );
 }

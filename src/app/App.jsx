@@ -8,6 +8,7 @@ import TranscriptArea from './components/TranscriptArea';
 import Controls from './components/Controls';
 import MicButton from './components/MicButton';
 import InputArea from './components/InputArea';
+import SessionRadialMenu from './components/SessionRadialMenu';
 
 export default function App() {
   const [initialized, setInitialized] = useState(false);
@@ -18,7 +19,11 @@ export default function App() {
   const [liveText, setLiveText] = useState('');
   const [inputText, setInputText] = useState('');
   const [showInput, setShowInput] = useState(false);
-  const [contextPercent, setContextPercent] = useState(0);
+  const [tmuxSessions, setTmuxSessions] = useState([]);
+  const [showSessionMenu, setShowSessionMenu] = useState(false);
+  const [activeTmuxSession, setActiveTmuxSession] = useState(() => {
+    return localStorage.getItem('voice-terminal-active-tmux') || '';
+  });
 
   const ws = useWebSocket();
   const speech = useSpeechRecognition();
@@ -70,6 +75,19 @@ export default function App() {
 
     ws.setHandler('status', (data) => {
       setLiveText(data.message);
+    });
+
+    ws.setHandler('tmux-sessions', (data) => {
+      setTmuxSessions(data.sessions || []);
+    });
+
+    ws.setHandler('tmux-session-created', (data) => {
+      if (!data?.name) return;
+      setActiveTmuxSession(data.name);
+      localStorage.setItem('voice-terminal-active-tmux', data.name);
+      setLiveText(`Attached to tmux session ${data.name}`);
+      ws.listTmuxSessions();
+      setShowSessionMenu(false);
     });
 
     ws.setHandler('tool-call', (data) => {
@@ -144,7 +162,7 @@ export default function App() {
     ws.setHandler('history-cleared', () => {
       // handled by local state clear
     });
-  }, [ws.setHandler, addMessage, tts.playAudio]);
+  }, [ws.setHandler, ws.listTmuxSessions, addMessage, tts.playAudio]);
 
   const requestWakeLock = useCallback(async () => {
     if (!('wakeLock' in navigator)) return;
@@ -248,8 +266,11 @@ export default function App() {
     setIsProcessing(true);
     setLiveText('Sending to Claude...');
     addMessage('user', text);
-    ws.sendCommand(text);
-  }, [inputText, addMessage, ws]);
+    const finalCommand = activeTmuxSession
+      ? `this speech command is intended for use with tmux session ${activeTmuxSession}\n\n${text}`
+      : text;
+    ws.sendCommand(finalCommand);
+  }, [inputText, addMessage, ws, activeTmuxSession]);
 
   const cancelMessage = useCallback(() => {
     setShowInput(false);
@@ -272,6 +293,34 @@ export default function App() {
     setInputText('');
     setIsProcessing(false);
     setLiveText('Restarting Claude session...');
+  }, [ws]);
+
+  const openSessionMenu = useCallback(() => {
+    ws.listTmuxSessions();
+    setShowSessionMenu(true);
+  }, [ws]);
+
+  const handleSelectTmuxSession = useCallback((sessionName) => {
+    const next = sessionName || '';
+    setActiveTmuxSession(next);
+    if (next) {
+      localStorage.setItem('voice-terminal-active-tmux', next);
+      setLiveText(`Attached to tmux session ${next}`);
+    } else {
+      localStorage.removeItem('voice-terminal-active-tmux');
+      setLiveText('Detached from tmux session');
+    }
+    setShowSessionMenu(false);
+  }, []);
+
+  const handleCreateClaudeSession = useCallback(() => {
+    ws.createTmuxSession('claude');
+    setLiveText('Creating new Claude tmux session...');
+  }, [ws]);
+
+  const handleCreateCodexSession = useCallback(() => {
+    ws.createTmuxSession('codex');
+    setLiveText('Creating new Codex tmux session...');
   }, [ws]);
 
   // ---- Spacebar shortcut ----
@@ -306,10 +355,13 @@ export default function App() {
           <Controls
             isConnected={ws.isConnected}
             claudeRunning={ws.claudeRunning}
-            contextPercent={contextPercent}
             onRestartSession={restartSession}
             onRefresh={() => location.reload()}
           />
+
+          <div className="text-xs text-slate-500 text-center">
+            Active tmux: {activeTmuxSession || 'none'}
+          </div>
 
           {liveText && !showInput && (
             <div className="text-sm text-slate-400 text-center min-h-[1.5em] px-4">
@@ -332,9 +384,20 @@ export default function App() {
             disabled={!ws.claudeRunning || isTranscribing}
             onClick={showInput ? sendMessage : toggleRecording}
             onCancel={cancelProcessing}
+            onLongPress={openSessionMenu}
           />
         </div>
       </div>
+
+      <SessionRadialMenu
+        open={showSessionMenu}
+        sessions={tmuxSessions}
+        activeSession={activeTmuxSession || null}
+        onSelectSession={handleSelectTmuxSession}
+        onCreateClaude={handleCreateClaudeSession}
+        onCreateCodex={handleCreateCodexSession}
+        onClose={() => setShowSessionMenu(false)}
+      />
     </div>
   );
 }

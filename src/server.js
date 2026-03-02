@@ -1,7 +1,7 @@
 import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
 import express from 'express';
-import { spawn } from 'child_process';
+import { spawn, execFile } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync, writeFileSync, unlinkSync } from 'fs';
@@ -46,6 +46,49 @@ let nextMessageId = 1;
 let sttWorkerProcess = null;
 let sttReady = false;
 let sttPending = new Map();
+
+function execFileAsync(command, args) {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, { encoding: 'utf8' }, (error, stdout, stderr) => {
+      if (error) {
+        reject(new Error((stderr || error.message || '').trim()));
+        return;
+      }
+      resolve((stdout || '').trim());
+    });
+  });
+}
+
+async function listTmuxSessions() {
+  const output = await execFileAsync('tmux', ['list-sessions']);
+  if (!output) return [];
+
+  return output
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const colon = line.indexOf(':');
+      const name = colon > 0 ? line.slice(0, colon) : line;
+      return { name, label: line };
+    });
+}
+
+function buildSessionName(kind) {
+  const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
+  const prefix = kind === 'codex' ? 'codex' : 'claude';
+  return `${prefix}-${stamp}`;
+}
+
+async function createTmuxSession(kind) {
+  const safeKind = kind === 'codex' ? 'codex' : 'claude';
+  const sessionName = buildSessionName(safeKind);
+  const command = safeKind === 'codex'
+    ? 'codex --sandbox danger-full-access --ask-for-approval never'
+    : 'claude --dangerously-skip-permissions';
+  await execFileAsync('tmux', ['new-session', '-d', '-s', sessionName, '-c', process.env.HOME, command]);
+  return { name: sessionName, kind: safeKind, command };
+}
 
 function startSTTWorker() {
   if (sttWorkerProcess) {
@@ -566,6 +609,37 @@ wss.on('connection', (ws) => {
           running: claudeReady,
           hasProcess: !!claudeProcess
         }));
+
+      } else if (message.type === 'list-tmux-sessions') {
+        listTmuxSessions()
+          .then((sessions) => {
+            ws.send(JSON.stringify({
+              type: 'tmux-sessions',
+              sessions
+            }));
+          })
+          .catch((err) => {
+            ws.send(JSON.stringify({
+              type: 'error',
+              message: `Failed to list tmux sessions: ${err.message}`
+            }));
+          });
+
+      } else if (message.type === 'create-tmux-session') {
+        createTmuxSession(message.kind)
+          .then((session) => {
+            ws.send(JSON.stringify({
+              type: 'tmux-session-created',
+              name: session.name,
+              kind: session.kind
+            }));
+          })
+          .catch((err) => {
+            ws.send(JSON.stringify({
+              type: 'error',
+              message: `Failed to create tmux session: ${err.message}`
+            }));
+          });
 
       } else if (message.type === 'voice-command') {
         const transcript = message.transcript;

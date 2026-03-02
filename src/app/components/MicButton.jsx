@@ -1,6 +1,6 @@
 import React from 'react';
 
-export default function MicButton({ isRecording, isProcessing, isSendMode, disabled, onClick, onCancel }) {
+export default function MicButton({ isRecording, isProcessing, isSendMode, disabled, onClick, onCancel, onLongPress }) {
   let bgClass = 'bg-gradient-to-br from-blue-500 to-blue-700 shadow-blue-500/30 animate-glow';
   let extraClass = '';
 
@@ -33,23 +33,83 @@ export default function MicButton({ isRecording, isProcessing, isSendMode, disab
 
   const handleClick = isProcessing ? onCancel : onClick;
   const isDisabled = isProcessing ? false : disabled;
+  const longPressTimeoutRef = React.useRef(null);
+  const longPressTriggeredRef = React.useRef(false);
+  const buttonRef = React.useRef(null);
 
   let icon = micIcon;
   if (isProcessing) icon = cancelIcon;
   else if (isSendMode) icon = sendIcon;
 
+  function clearLongPressTimer() {
+    if (longPressTimeoutRef.current) {
+      clearTimeout(longPressTimeoutRef.current);
+      longPressTimeoutRef.current = null;
+    }
+  }
+
+  function handlePointerDown(e) {
+    e.preventDefault();
+    if (isDisabled) return;
+
+    longPressTriggeredRef.current = false;
+    clearLongPressTimer();
+    longPressTimeoutRef.current = setTimeout(() => {
+      longPressTriggeredRef.current = true;
+      if (onLongPress) onLongPress();
+    }, 450);
+  }
+
+  function handlePointerUp(e) {
+    e.preventDefault();
+    if (isDisabled) return;
+
+    clearLongPressTimer();
+    if (!longPressTriggeredRef.current) {
+      handleClick();
+    }
+    longPressTriggeredRef.current = false;
+  }
+
+  function handlePointerCancel() {
+    clearLongPressTimer();
+    longPressTriggeredRef.current = false;
+  }
+
+  React.useEffect(() => {
+    const buttonEl = buttonRef.current;
+    if (!buttonEl) return undefined;
+
+    const handleTouchStart = (e) => {
+      e.preventDefault();
+    };
+
+    buttonEl.addEventListener('touchstart', handleTouchStart, { passive: false });
+
+    return () => {
+      buttonEl.removeEventListener('touchstart', handleTouchStart);
+    };
+  }, []);
+
   return (
     <button
-      onPointerDown={(e) => {
-        e.preventDefault();
-        if (!isDisabled) handleClick();
-      }}
+      ref={buttonRef}
+      onPointerDown={handlePointerDown}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerCancel}
+      onPointerLeave={handlePointerCancel}
+      onContextMenu={(e) => e.preventDefault()}
       disabled={isDisabled}
+      style={{
+        WebkitTouchCallout: 'none',
+        WebkitUserSelect: 'none',
+        userSelect: 'none',
+      }}
       className={`
         w-20 h-20 rounded-full flex items-center justify-center
         text-white shadow-lg transition-all duration-200
         disabled:opacity-40 disabled:cursor-not-allowed disabled:animate-none
-        touch-none select-none
+        touch-none
         ${bgClass} ${extraClass}
       `}
     >

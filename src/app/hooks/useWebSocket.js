@@ -135,6 +135,8 @@ export default function useWebSocket() {
   const cancelRequest = useCallback(() => send('cancel-request'), [send]);
   const clearHistory = useCallback(() => send('clear-history'), [send]);
   const getHistory = useCallback(() => send('get-history'), [send]);
+  const listTmuxSessions = useCallback(() => send('list-tmux-sessions'), [send]);
+  const createTmuxSession = useCallback((kind) => send('create-tmux-session', { kind }), [send]);
 
   return {
     isConnected,
@@ -149,5 +151,7 @@ export default function useWebSocket() {
     cancelRequest,
     clearHistory,
     getHistory,
+    listTmuxSessions,
+    createTmuxSession,
   };
 }
