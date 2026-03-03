@@ -13,6 +13,7 @@ const STATE_DIR = join(BASE_DIR, 'states');
 const LOCK_DIR = join(BASE_DIR, 'locks');
 const QUIET_MS_DEFAULT = 5000;
 const POST_PASTE_ENTER_DELAY_MS = 120;
+const SUBMIT_KEY = 'Enter';
 const MAX_BUFFER = 10 * 1024 * 1024;
 const TIMEOUT_MS = 15000;
 
@@ -332,18 +333,17 @@ async function cmdSendInput(opts) {
   const pressEnter = !opts['no-enter'];
   const payload = opts.text;
   const payloadBytes = Buffer.byteLength(payload);
-  const likelyBracketedPaste = payload.includes('\n') || payloadBytes >= 512;
-  const enterDelayMs = likelyBracketedPaste ? POST_PASTE_ENTER_DELAY_MS : 0;
+  const enterDelayMs = pressEnter ? POST_PASTE_ENTER_DELAY_MS : 0;
 
   const result = await withPaneLock(key, async () => {
     const bufferName = `voice_terminal_${randomUUID().replace(/-/g, '')}`;
     await runTmux(['load-buffer', '-b', bufferName, '-'], { input: payload });
     await runTmux(['paste-buffer', '-d', '-b', bufferName, '-t', resolved.target]);
     if (pressEnter) {
-      // When bracketed paste mode is active, submitting immediately can be dropped.
-      // A short post-paste delay before carriage return makes submission deterministic.
+      // Large pastes can race with submit; wait briefly, then use Enter.
+      // In tmux 3.4 + Codex panes, lowercase C-m is not reliable as an Enter alias.
       await sleep(enterDelayMs);
-      await runTmux(['send-keys', '-t', resolved.target, 'C-m']);
+      await runTmux(['send-keys', '-t', resolved.target, SUBMIT_KEY]);
     }
     return {
       ok: true,
