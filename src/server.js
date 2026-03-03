@@ -50,6 +50,34 @@ let sttPending = new Map();
 let tmuxStatusInterval = null;
 let lastTmuxStatusJson = '';
 
+function cloneToolCalls(toolCalls) {
+  if (!Array.isArray(toolCalls)) return [];
+  return toolCalls.map((tc) => ({
+    toolName: tc?.toolName,
+    input: tc?.input
+  }));
+}
+
+function cloneTimeline(timeline) {
+  if (!Array.isArray(timeline)) return [];
+  return timeline.map((event) => ({ ...event }));
+}
+
+function snapshotCurrentTurn() {
+  return {
+    fullResponse: responseBuffer || '',
+    toolCalls: cloneToolCalls(currentTurnToolCalls),
+    timeline: cloneTimeline(currentTurnTimeline)
+  };
+}
+
+function hasVisibleTurnContent(snapshot) {
+  if (!snapshot) return false;
+  if (Array.isArray(snapshot.timeline) && snapshot.timeline.length > 0) return true;
+  if (Array.isArray(snapshot.toolCalls) && snapshot.toolCalls.length > 0) return true;
+  return typeof snapshot.fullResponse === 'string' && snapshot.fullResponse.trim().length > 0;
+}
+
 function getTTSEnabledClients(targetClient = null) {
   if (targetClient) {
     return targetClient.readyState === 1 && targetClient.ttsEnabled !== false ? [targetClient] : [];
@@ -345,12 +373,49 @@ function startClaudeSession() {
 function interruptClaude() {
   if (!claudeProcess) {
     console.log('No Claude session to interrupt');
-    return false;
+    return { success: false };
   }
   console.log('Soft-cancelling current turn (session stays alive)...');
+
+  let cancelledSnapshot = null;
+  if (inFlightTurn && !inFlightTurn.cancelledSnapshotSaved) {
+    const snapshot = snapshotCurrentTurn();
+    if (hasVisibleTurnContent(snapshot)) {
+      const assistantMessage = {
+        id: nextMessageId++,
+        type: 'assistant',
+        content: snapshot.fullResponse,
+        spokenSummary: '',
+        toolCalls: snapshot.toolCalls,
+        timeline: snapshot.timeline,
+        spokenDelivered: true,
+        metadata: {
+          interrupted: true,
+          cancelled: true,
+          partial: true
+        },
+        timestamp: Date.now()
+      };
+      conversationHistory.push(assistantMessage);
+      cancelledSnapshot = {
+        fullResponse: assistantMessage.content,
+        toolCalls: assistantMessage.toolCalls,
+        timeline: assistantMessage.timeline
+      };
+      inFlightTurn.cancelledSnapshotSaved = true;
+      inFlightTurn.cancelled = true;
+    }
+  }
+
   cancelledTurn = true;
   responseBuffer = '';
-  return true;
+  currentTurnToolCalls = [];
+  currentTurnTimeline = [];
+  currentTurnSeq = 0;
+  if (inFlightTurn) {
+    inFlightTurn.cancelled = true;
+  }
+  return { success: true, cancelledSnapshot };
 }
 
 function stopClaudeSession() {
@@ -736,11 +801,12 @@ wss.on('connection', (ws) => {
         }));
 
       } else if (message.type === 'get-history') {
+        const activeTurn = inFlightTurn && !inFlightTurn.cancelled ? inFlightTurn : null;
         // Send conversation history to reconnecting client
         ws.send(JSON.stringify({
           type: 'history',
           messages: conversationHistory,
-          inFlightTurn
+          inFlightTurn: activeTurn
         }));
 
         const pendingSpeech = conversationHistory.filter(
@@ -759,10 +825,13 @@ wss.on('connection', (ws) => {
         }));
 
       } else if (message.type === 'cancel-request') {
-        const interrupted = interruptClaude();
+        const interruptResult = interruptClaude();
         broadcastToClients({
           type: 'request-cancelled',
-          success: interrupted
+          success: interruptResult.success,
+          fullResponse: interruptResult.cancelledSnapshot?.fullResponse || '',
+          toolCalls: interruptResult.cancelledSnapshot?.toolCalls || [],
+          timeline: interruptResult.cancelledSnapshot?.timeline || []
         });
 
       } else if (message.type === 'restart-session') {

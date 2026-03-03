@@ -2,6 +2,7 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import useWebSocket from './hooks/useWebSocket';
 import useSpeechRecognition from './hooks/useSpeechRecognition';
 import useTTS from './hooks/useTTS';
+import useDebugAudioCues from './hooks/useDebugAudioCues';
 import TranscriptArea from './components/TranscriptArea';
 import Controls from './components/Controls';
 import MicButton from './components/MicButton';
@@ -71,7 +72,15 @@ export default function App() {
   const ws = useWebSocket();
   const speech = useSpeechRecognition();
   const tts = useTTS();
+  const {
+    unlock: unlockDebugCues,
+    playMicStart,
+    playMicStop,
+    playTTSStart,
+    playTTSStop,
+  } = useDebugAudioCues();
   const ttsMetaRef = useRef(null);
+  const prevIsSpeakingRef = useRef(false);
   const wakeLockRef = useRef(null);
   const recordingControlsRef = useRef(null);
 
@@ -269,8 +278,32 @@ export default function App() {
       setIsProcessing(false);
     });
 
-    ws.setHandler('request-cancelled', () => {
-      setStreamingMessage(null);
+    ws.setHandler('request-cancelled', (data) => {
+      setStreamingMessage((prev) => {
+        const timeline = (Array.isArray(data?.timeline) && data.timeline.length > 0)
+          ? data.timeline
+          : (prev?.timeline || []);
+        const toolCalls = (Array.isArray(data?.toolCalls) && data.toolCalls.length > 0)
+          ? data.toolCalls
+          : (prev?.toolCalls || []);
+        const content = typeof data?.fullResponse === 'string' && data.fullResponse.length > 0
+          ? data.fullResponse
+          : (prev?.text || '');
+        const hasVisibleContent = timeline.length > 0 || toolCalls.length > 0 || content.trim().length > 0;
+
+        if (hasVisibleContent) {
+          addMessage(
+            'assistant',
+            content,
+            '',
+            { interrupted: true, cancelled: true, partial: true },
+            toolCalls,
+            timeline
+          );
+        }
+
+        return null;
+      });
       setIsProcessing(false);
       setLiveText('Cancelled');
       setTimeout(() => setLiveText(''), 1500);
@@ -332,16 +365,19 @@ export default function App() {
       return;
     }
     tts.unlock(); // iOS gesture unlock
+    unlockDebugCues(); // iOS gesture unlock for debug cues
     const started = await speech.startListening();
     if (started) {
+      playMicStart();
       setLiveText('Listening...');
     } else {
       setLiveText('Unable to start microphone');
     }
-  }, [isProcessing, isTranscribing, speech, ws.claudeRunning, tts]);
+  }, [isProcessing, isTranscribing, speech, ws.claudeRunning, tts, unlockDebugCues, playMicStart]);
 
   const stopRecording = useCallback(async () => {
     if (!speech.isListening) return;
+    playMicStop();
     setIsTranscribing(true);
     setLiveText('Transcribing on server...');
 
@@ -383,7 +419,7 @@ export default function App() {
     } finally {
       setIsTranscribing(false);
     }
-  }, [speech, ws, autoSend, addMessage, activeTmuxSession]);
+  }, [speech, ws, autoSend, addMessage, activeTmuxSession, playMicStop]);
 
   const toggleRecording = useCallback(() => {
     if (isProcessing || isTranscribing) return;
@@ -396,6 +432,7 @@ export default function App() {
 
   const abortRecording = useCallback(async () => {
     if (!speech.isListening) return;
+    playMicStop();
     try {
       await speech.stopListening();
     } catch {
@@ -406,7 +443,7 @@ export default function App() {
     setShowInput(false);
     setLiveText('Recording discarded');
     setTimeout(() => setLiveText(''), 1200);
-  }, [speech]);
+  }, [speech, playMicStop]);
 
   // ---- Send / Cancel ----
 
@@ -554,6 +591,16 @@ export default function App() {
     if (!ws.isConnected) return;
     ws.setTTSEnabled(ttsEnabled);
   }, [ws.isConnected, ws.setTTSEnabled, ttsEnabled]);
+
+  useEffect(() => {
+    const wasSpeaking = prevIsSpeakingRef.current;
+    if (!wasSpeaking && tts.isSpeaking) {
+      playTTSStart();
+    } else if (wasSpeaking && !tts.isSpeaking) {
+      playTTSStop();
+    }
+    prevIsSpeakingRef.current = tts.isSpeaking;
+  }, [tts.isSpeaking, playTTSStart, playTTSStop]);
 
   // ---- Render ----
 

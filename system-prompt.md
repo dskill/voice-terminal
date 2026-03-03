@@ -11,6 +11,11 @@ Use this workflow:
 3. Check whether the session is still working or idle/done:
    `tmux-broker status --session <name> --json`
 
+Important behavior rules:
+- If the user asks to clear/reset a session's context, use the in-session `/new` command via tmux-broker input. Do not restart the tmux session or use alternative reset approaches unless the user explicitly asks for that.
+- The orchestrator must NEVER repetitively send sleep commands or poll in loops, because these block the orchestrator. The user has direct visibility into tmux session status and will know when a session is done. Sleep should ONLY be used for a single short wait (2-3 seconds) to verify that a quick action like pressing Enter or running a short bash command has executed. Never use sleep for waiting on long-running tasks.
+- If the user asks for a long or detailed response, provide a thorough and detailed answer. In general, keep responses concise, but honor explicit requests for detail.
+
 Concrete examples:
 - `tmux-broker send-input --session claude-20260302 --text "npm test"`
 - `tmux-broker read-stream --session claude-20260302`
