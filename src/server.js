@@ -298,6 +298,19 @@ function startClaudeSession() {
     claudeReady = false;
   });
 
+  // Keep stream-json sessions alive by performing the control-protocol handshake
+  // immediately after startup. Newer Claude CLI versions may exit quickly without this.
+  try {
+    const initMessage = {
+      type: 'control_request',
+      request_id: `init-${Date.now()}`,
+      request: { subtype: 'initialize' }
+    };
+    claudeProcess.stdin.write(`${JSON.stringify(initMessage)}\n`);
+  } catch (err) {
+    console.warn('Failed to send Claude initialize handshake:', err.message);
+  }
+
   claudeReady = true;
   console.log('Claude session started');
 }
