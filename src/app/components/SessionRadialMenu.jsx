@@ -58,8 +58,8 @@ export default function SessionRadialMenu({
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm" onClick={onClose}>
-      <div className="absolute inset-0 flex items-center justify-center p-4" onClick={(e) => e.stopPropagation()}>
-        <div className="w-full max-w-xl max-h-[85vh] rounded-3xl border border-slate-600 bg-slate-900/95 shadow-2xl overflow-hidden">
+      <div className="absolute inset-0 flex items-center justify-center p-4 pointer-events-none">
+        <div className="w-full max-w-xl max-h-[85vh] rounded-3xl border border-slate-600 bg-slate-900/95 shadow-2xl overflow-hidden pointer-events-auto" onClick={(e) => e.stopPropagation()}>
           <div className="px-5 py-4 border-b border-slate-700">
             <div className="text-base font-semibold text-slate-100">Tmux Sessions</div>
             <div className="text-xs text-slate-400 mt-1">
