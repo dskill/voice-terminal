@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "description": "Voice-driven terminal interface for cloud VMs using Claude Code",
   "type": "module",
+  "bin": {
+    "tmux-broker": "src/tmux-broker.js"
+  },
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",

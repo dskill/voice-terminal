@@ -1,6 +1,8 @@
 import React, { useMemo } from 'react';
 
-function SessionPill({ label, sublabel, active, onClick, plus = false }) {
+function SessionPill({ label, sublabel, active, onClick, plus = false, state = null, unreadCount = 0 }) {
+  const showStatus = !plus && !!state;
+  const isWorking = state === 'working';
   return (
     <button
       onClick={onClick}
@@ -12,7 +14,24 @@ function SessionPill({ label, sublabel, active, onClick, plus = false }) {
             : 'bg-slate-800/90 border-slate-600 text-slate-100 hover:bg-slate-700/90'
       }`}
     >
-      <div className="text-sm font-semibold break-words whitespace-normal">{label}</div>
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-sm font-semibold break-words whitespace-normal">{label}</div>
+        {(showStatus || unreadCount > 0) && (
+          <div className="flex items-center gap-1.5 shrink-0">
+            {showStatus && (
+              <span
+                className={`inline-block w-2 h-2 rounded-full ${isWorking ? 'bg-emerald-300' : 'bg-slate-300'}`}
+                title={isWorking ? 'Working' : 'Idle'}
+              />
+            )}
+            {unreadCount > 0 && (
+              <span className="min-w-[1.1rem] h-[1.1rem] px-1 rounded-full bg-blue-500 text-[10px] leading-[1.1rem] text-white font-semibold text-center">
+                {unreadCount > 9 ? '9+' : unreadCount}
+              </span>
+            )}
+          </div>
+        )}
+      </div>
       {sublabel && (
         <div className="text-xs text-slate-300 break-words whitespace-normal mt-1">
           {sublabel}
@@ -26,6 +45,8 @@ export default function SessionRadialMenu({
   open,
   sessions,
   activeSession,
+  statusBySession,
+  unreadCompletions,
   onSelectSession,
   onCreateClaude,
   onCreateCodex,
@@ -77,6 +98,8 @@ export default function SessionRadialMenu({
                     label={session.name}
                     sublabel={session.label}
                     active={activeSession === session.name}
+                    state={statusBySession?.[session.name]?.state || null}
+                    unreadCount={Number(unreadCompletions?.[session.name] || 0)}
                     onClick={() => onSelectSession(session.name)}
                   />
                 ))}

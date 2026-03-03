@@ -137,10 +137,6 @@ export default function useWebSocket() {
   const getHistory = useCallback(() => send('get-history'), [send]);
   const listTmuxSessions = useCallback(() => send('list-tmux-sessions'), [send]);
   const createTmuxSession = useCallback((kind) => send('create-tmux-session', { kind }), [send]);
-  const setActiveTmuxSession = useCallback((session) => send('select-tmux-session', { session }), [send]);
-  const tmuxSendInput = useCallback((payload) => send('tmux-send-input', payload), [send]);
-  const tmuxReadSnapshot = useCallback((payload) => send('tmux-read-snapshot', payload), [send]);
-  const tmuxReadStream = useCallback((payload) => send('tmux-read-stream', payload), [send]);
 
   return {
     isConnected,
@@ -157,9 +153,5 @@ export default function useWebSocket() {
     getHistory,
     listTmuxSessions,
     createTmuxSession,
-    setActiveTmuxSession,
-    tmuxSendInput,
-    tmuxReadSnapshot,
-    tmuxReadStream,
   };
 }

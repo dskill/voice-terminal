@@ -5,16 +5,10 @@ import { spawn, execFile } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync, writeFileSync, unlinkSync } from 'fs';
+import { promises as fsp } from 'fs';
 import { createInterface } from 'readline';
 import { tmpdir } from 'os';
 import { loadTTSModel, isTTSReady, synthesize } from './tts.js';
-import {
-  tmuxSendInput,
-  tmuxReadSnapshot,
-  tmuxSetupReadStream,
-  tmuxReadStream,
-  tmuxSetupSessionLogging
-} from './tmux-broker.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -28,7 +22,6 @@ const publicPath = join(__dirname, '../public');
 const systemPromptPath = join(__dirname, '../system-prompt.md');
 const staticPath = existsSync(distPath) ? distPath : publicPath;
 console.log(`Serving static files from: ${staticPath}`);
-app.use(express.json({ limit: '2mb' }));
 app.use(express.static(staticPath));
 
 const server = createServer(app);
@@ -53,6 +46,9 @@ let nextMessageId = 1;
 let sttWorkerProcess = null;
 let sttReady = false;
 let sttPending = new Map();
+let tmuxStatusInterval = null;
+let lastTmuxStatusJson = '';
+const TMUX_BROKER_STATE_DIR = join(tmpdir(), 'voice-terminal-tmux-broker', 'states');
 
 function execFileAsync(command, args) {
   return new Promise((resolve, reject) => {
@@ -94,61 +90,7 @@ async function createTmuxSession(kind) {
     ? 'codex --sandbox danger-full-access --ask-for-approval never'
     : 'claude --dangerously-skip-permissions';
   await execFileAsync('tmux', ['new-session', '-d', '-s', sessionName, '-c', process.env.HOME, command]);
-  try {
-    await tmuxSetupSessionLogging(sessionName);
-  } catch (err) {
-    console.warn(`[tmux-broker] Failed to setup logging for ${sessionName}: ${err.message}`);
-  }
   return { name: sessionName, kind: safeKind, command };
-}
-
-function parseCursor(value) {
-  if (value === undefined || value === null || value === '') return null;
-  const num = Number(value);
-  if (!Number.isInteger(num) || num < 0) {
-    throw new Error('cursor must be a non-negative integer');
-  }
-  return num;
-}
-
-async function handleTmuxBrokerSend(payload) {
-  const result = await tmuxSendInput(
-    payload.session,
-    payload.pane || null,
-    payload.text ?? '',
-    payload.pressEnter !== false
-  );
-  return result;
-}
-
-async function handleTmuxBrokerSnapshot(payload) {
-  const result = await tmuxReadSnapshot(
-    payload.session,
-    payload.pane || null,
-    payload.lines
-  );
-  return result;
-}
-
-async function handleTmuxBrokerStream(payload) {
-  const cursor = parseCursor(payload.cursor);
-  const result = await tmuxReadStream(
-    payload.session,
-    payload.pane || null,
-    cursor
-  );
-  return result;
-}
-
-async function handleTmuxBrokerSelect(payload) {
-  if (!payload.session || !String(payload.session).trim()) {
-    throw new Error('session is required');
-  }
-  const streams = await tmuxSetupSessionLogging(payload.session);
-  return {
-    session: payload.session,
-    streamCount: streams.length
-  };
 }
 
 function startSTTWorker() {
@@ -313,9 +255,14 @@ function startClaudeSession() {
     '--dangerously-skip-permissions'
   ];
 
+  const projectBinDir = join(__dirname, '..');
+
   claudeProcess = spawn('claude', args, {
     cwd: process.env.HOME,
-    env: { ...process.env },
+    env: {
+      ...process.env,
+      PATH: `${projectBinDir}:${process.env.PATH || ''}`
+    },
     stdio: ['pipe', 'pipe', 'pipe']
   });
 
@@ -610,51 +557,84 @@ async function synthesizeAndBroadcastAudio(text, messageId = null) {
 }
 
 // ============================================
-// HTTP API: TMux Broker
+// TMux Agent Status Polling
 // ============================================
 
-function sendApiError(res, error) {
-  res.status(400).json({
-    ok: false,
-    error: error?.message || String(error)
-  });
+function aggregateSessionStatus(states) {
+  const bySession = new Map();
+  for (const state of states) {
+    if (!state?.session || !state?.paneId) continue;
+    const session = state.session;
+    const existing = bySession.get(session) || {
+      session,
+      state: 'idle',
+      completionCount: 0,
+      lastDoneAt: 0,
+      panes: []
+    };
+    const paneState = state.state === 'working' ? 'working' : 'idle';
+    if (paneState === 'working') {
+      existing.state = 'working';
+    }
+    existing.completionCount += Number(state.completionCount || 0);
+    existing.lastDoneAt = Math.max(existing.lastDoneAt, Number(state.lastDoneAt || 0));
+    existing.panes.push({
+      paneId: state.paneId,
+      state: paneState,
+      completionCount: Number(state.completionCount || 0),
+      lastDoneAt: Number(state.lastDoneAt || 0),
+      lastActivityAt: Number(state.lastActivityAt || 0)
+    });
+    bySession.set(session, existing);
+  }
+
+  return [...bySession.values()].sort((a, b) => a.session.localeCompare(b.session));
 }
 
-app.post('/api/tmux/select-session', async (req, res) => {
+async function readTmuxAgentStatus() {
   try {
-    const result = await handleTmuxBrokerSelect(req.body || {});
-    res.json({ ok: true, ...result });
+    const files = await fsp.readdir(TMUX_BROKER_STATE_DIR);
+    const states = [];
+    for (const file of files) {
+      if (!file.endsWith('.json')) continue;
+      const fullPath = join(TMUX_BROKER_STATE_DIR, file);
+      try {
+        const raw = await fsp.readFile(fullPath, 'utf8');
+        states.push(JSON.parse(raw));
+      } catch {
+        // Ignore transient/invalid state writes
+      }
+    }
+    return aggregateSessionStatus(states);
   } catch (err) {
-    sendApiError(res, err);
+    if (err?.code === 'ENOENT') return [];
+    console.warn(`[tmux-status] Failed to read broker states: ${err.message}`);
+    return [];
   }
-});
+}
 
-app.post('/api/tmux/send-input', async (req, res) => {
-  try {
-    const result = await handleTmuxBrokerSend(req.body || {});
-    res.json({ ok: true, ...result });
-  } catch (err) {
-    sendApiError(res, err);
-  }
-});
+async function publishTmuxAgentStatus(force = false) {
+  const sessions = await readTmuxAgentStatus();
+  const payload = { type: 'tmux-agent-status', sessions };
+  const json = JSON.stringify(payload);
+  if (!force && json === lastTmuxStatusJson) return;
+  lastTmuxStatusJson = json;
+  broadcastToClients(payload);
+}
 
-app.post('/api/tmux/read-snapshot', async (req, res) => {
-  try {
-    const result = await handleTmuxBrokerSnapshot(req.body || {});
-    res.json({ ok: true, ...result });
-  } catch (err) {
-    sendApiError(res, err);
-  }
-});
+function startTmuxStatusPolling() {
+  if (tmuxStatusInterval) return;
+  publishTmuxAgentStatus(true).catch(() => {});
+  tmuxStatusInterval = setInterval(() => {
+    publishTmuxAgentStatus(false).catch(() => {});
+  }, 2000);
+}
 
-app.post('/api/tmux/read-stream', async (req, res) => {
-  try {
-    const result = await handleTmuxBrokerStream(req.body || {});
-    res.json({ ok: true, ...result });
-  } catch (err) {
-    sendApiError(res, err);
-  }
-});
+function stopTmuxStatusPolling() {
+  if (!tmuxStatusInterval) return;
+  clearInterval(tmuxStatusInterval);
+  tmuxStatusInterval = null;
+}
 
 // ============================================
 // WebSocket Handlers
@@ -670,6 +650,7 @@ wss.on('connection', (ws) => {
     running: claudeReady,
     hasProcess: !!claudeProcess
   }));
+  publishTmuxAgentStatus(true).catch(() => {});
 
   ws.on('message', (data) => {
     try {
@@ -759,90 +740,6 @@ wss.on('connection', (ws) => {
             ws.send(JSON.stringify({
               type: 'error',
               message: `Failed to create tmux session: ${err.message}`
-            }));
-          });
-
-      } else if (message.type === 'select-tmux-session') {
-        handleTmuxBrokerSelect(message)
-          .then((result) => {
-            ws.send(JSON.stringify({
-              type: 'tmux-session-selected',
-              session: result.session,
-              streamCount: result.streamCount
-            }));
-          })
-          .catch((err) => {
-            ws.send(JSON.stringify({
-              type: 'error',
-              message: `Failed to select tmux session: ${err.message}`
-            }));
-          });
-
-      } else if (message.type === 'tmux-send-input') {
-        handleTmuxBrokerSend(message)
-          .then((result) => {
-            ws.send(JSON.stringify({
-              type: 'tmux-input-sent',
-              requestId: message.requestId || null,
-              ...result
-            }));
-          })
-          .catch((err) => {
-            ws.send(JSON.stringify({
-              type: 'tmux-broker-error',
-              requestId: message.requestId || null,
-              message: err.message
-            }));
-          });
-
-      } else if (message.type === 'tmux-read-snapshot') {
-        handleTmuxBrokerSnapshot(message)
-          .then((result) => {
-            ws.send(JSON.stringify({
-              type: 'tmux-output-snapshot',
-              requestId: message.requestId || null,
-              ...result
-            }));
-          })
-          .catch((err) => {
-            ws.send(JSON.stringify({
-              type: 'tmux-broker-error',
-              requestId: message.requestId || null,
-              message: err.message
-            }));
-          });
-
-      } else if (message.type === 'tmux-read-stream') {
-        handleTmuxBrokerStream(message)
-          .then((result) => {
-            ws.send(JSON.stringify({
-              type: 'tmux-output-stream',
-              requestId: message.requestId || null,
-              ...result
-            }));
-          })
-          .catch((err) => {
-            ws.send(JSON.stringify({
-              type: 'tmux-broker-error',
-              requestId: message.requestId || null,
-              message: err.message
-            }));
-          });
-
-      } else if (message.type === 'tmux-setup-stream') {
-        tmuxSetupReadStream(message.session, message.pane || null)
-          .then((result) => {
-            ws.send(JSON.stringify({
-              type: 'tmux-stream-ready',
-              requestId: message.requestId || null,
-              ...result
-            }));
-          })
-          .catch((err) => {
-            ws.send(JSON.stringify({
-              type: 'tmux-broker-error',
-              requestId: message.requestId || null,
-              message: err.message
             }));
           });
 
@@ -942,6 +839,7 @@ server.listen(PORT, () => {
   // Auto-start Claude session
   startClaudeSession();
   startSTTWorker();
+  startTmuxStatusPolling();
 
   // Fire-and-forget TTS model loading
   loadTTSModel();
@@ -952,6 +850,7 @@ process.on('SIGTERM', () => {
   console.log('Shutting down...');
   stopClaudeSession();
   stopSTTWorker();
+  stopTmuxStatusPolling();
   process.exit(0);
 });
 
@@ -959,5 +858,6 @@ process.on('SIGINT', () => {
   console.log('Shutting down...');
   stopClaudeSession();
   stopSTTWorker();
+  stopTmuxStatusPolling();
   process.exit(0);
 });

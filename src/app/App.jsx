@@ -26,6 +26,11 @@ export default function App() {
   const [activeTmuxSession, setActiveTmuxSession] = useState(() => {
     return localStorage.getItem('voice-terminal-active-tmux') || '';
   });
+  const [tmuxStatusBySession, setTmuxStatusBySession] = useState({});
+  const [tmuxUnreadCompletions, setTmuxUnreadCompletions] = useState({});
+  const [doneFlashVisible, setDoneFlashVisible] = useState(false);
+  const completionSeenRef = useRef({});
+  const doneFlashTimerRef = useRef(null);
 
   const ws = useWebSocket();
   const speech = useSpeechRecognition();
@@ -93,14 +98,51 @@ export default function App() {
       setActiveTmuxSession(data.name);
       localStorage.setItem('voice-terminal-active-tmux', data.name);
       setLiveText(`Attached to tmux session ${data.name}`);
-      ws.setActiveTmuxSession(data.name);
+      setTmuxUnreadCompletions((prev) => ({ ...prev, [data.name]: 0 }));
       ws.listTmuxSessions();
       setShowSessionMenu(false);
     });
 
-    ws.setHandler('tmux-session-selected', (data) => {
-      if (!data?.session) return;
-      setLiveText(`Attached to tmux session ${data.session}`);
+    ws.setHandler('tmux-agent-status', (data) => {
+      const sessions = Array.isArray(data?.sessions) ? data.sessions : [];
+      const nextStatus = {};
+      for (const session of sessions) {
+        if (!session?.session) continue;
+        nextStatus[session.session] = {
+          state: session.state === 'working' ? 'working' : 'idle',
+          completionCount: Number(session.completionCount || 0),
+          lastDoneAt: Number(session.lastDoneAt || 0)
+        };
+      }
+
+      setTmuxStatusBySession(nextStatus);
+      setTmuxUnreadCompletions((prev) => {
+        const nextUnread = { ...prev };
+        for (const [sessionName, status] of Object.entries(nextStatus)) {
+          const previousSeen = Number(completionSeenRef.current[sessionName] || 0);
+          const delta = Math.max(0, status.completionCount - previousSeen);
+          if (delta > 0) {
+            if (sessionName === activeTmuxSession) {
+              if (doneFlashTimerRef.current) clearTimeout(doneFlashTimerRef.current);
+              setDoneFlashVisible(true);
+              doneFlashTimerRef.current = setTimeout(() => setDoneFlashVisible(false), 2000);
+              nextUnread[sessionName] = 0;
+            } else {
+              nextUnread[sessionName] = Number(nextUnread[sessionName] || 0) + delta;
+            }
+          }
+          completionSeenRef.current[sessionName] = status.completionCount;
+        }
+
+        for (const sessionName of Object.keys(nextUnread)) {
+          if (!nextStatus[sessionName]) {
+            delete nextUnread[sessionName];
+            delete completionSeenRef.current[sessionName];
+          }
+        }
+
+        return nextUnread;
+      });
     });
 
     ws.setHandler('tool-call', (data) => {
@@ -175,7 +217,7 @@ export default function App() {
     ws.setHandler('history-cleared', () => {
       // handled by local state clear
     });
-  }, [ws.setHandler, ws.listTmuxSessions, ws.setActiveTmuxSession, addMessage, tts.playAudio]);
+  }, [ws.setHandler, ws.listTmuxSessions, addMessage, tts.playAudio, activeTmuxSession]);
 
   const requestWakeLock = useCallback(async () => {
     if (!('wakeLock' in navigator)) return;
@@ -211,6 +253,15 @@ export default function App() {
       }
     };
   }, [initialized, requestWakeLock]);
+
+  useEffect(() => {
+    return () => {
+      if (doneFlashTimerRef.current) {
+        clearTimeout(doneFlashTimerRef.current);
+        doneFlashTimerRef.current = null;
+      }
+    };
+  }, []);
 
   // ---- Recording flow ----
 
@@ -343,13 +394,17 @@ export default function App() {
     if (next) {
       localStorage.setItem('voice-terminal-active-tmux', next);
       setLiveText(`Attached to tmux session ${next}`);
-      ws.setActiveTmuxSession(next);
+      const status = tmuxStatusBySession[next];
+      if (status) {
+        completionSeenRef.current[next] = status.completionCount;
+      }
+      setTmuxUnreadCompletions((prev) => ({ ...prev, [next]: 0 }));
     } else {
       localStorage.removeItem('voice-terminal-active-tmux');
       setLiveText('Detached from tmux session');
     }
     setShowSessionMenu(false);
-  }, [ws]);
+  }, [tmuxStatusBySession]);
 
   const handleCreateClaudeSession = useCallback(() => {
     ws.createTmuxSession('claude');
@@ -360,11 +415,6 @@ export default function App() {
     ws.createTmuxSession('codex');
     setLiveText('Creating new Codex tmux session...');
   }, [ws]);
-
-  useEffect(() => {
-    if (!ws.isConnected || !activeTmuxSession) return;
-    ws.setActiveTmuxSession(activeTmuxSession);
-  }, [ws.isConnected, ws.setActiveTmuxSession, activeTmuxSession]);
 
   // ---- Spacebar shortcut ----
 
@@ -387,6 +437,11 @@ export default function App() {
     return <LoadingOverlay onStart={() => setInitialized(true)} />;
   }
 
+  const totalUnreadCompletions = Object.values(tmuxUnreadCompletions).reduce((sum, value) => sum + Number(value || 0), 0);
+  const activeTmuxStatus = activeTmuxSession ? tmuxStatusBySession[activeTmuxSession] : null;
+  const activeStatusText = activeTmuxStatus?.state === 'working' ? 'Working' : 'Idle';
+  const activeStatusDot = activeTmuxStatus?.state === 'working' ? 'bg-emerald-400' : 'bg-slate-400';
+
   return (
     <div className="h-dvh flex flex-col bg-slate-900 text-slate-100">
       <div className="flex items-center justify-center border-b border-slate-700/50 bg-slate-800/80 backdrop-blur-sm">
@@ -404,8 +459,19 @@ export default function App() {
         <TranscriptArea messages={messages} streamingMessage={streamingMessage} />
 
         <div className="flex-shrink-0 flex flex-col items-center gap-3 pt-4 border-t border-slate-800/50 mt-4">
-          <div className="text-xs text-slate-500 text-center">
-            Active tmux: {activeTmuxSession || 'none'}
+          <div className="text-xs text-slate-500 text-center flex items-center gap-2">
+            <span>Active tmux: {activeTmuxSession || 'none'}</span>
+            {activeTmuxSession && (
+              <>
+                <span className={`inline-block w-2 h-2 rounded-full ${activeStatusDot}`} />
+                <span>{activeStatusText}</span>
+              </>
+            )}
+            {doneFlashVisible && activeTmuxSession && (
+              <span className="px-1.5 py-0.5 rounded bg-blue-600/80 text-blue-50 text-[10px] font-semibold">
+                Done
+              </span>
+            )}
           </div>
 
           {liveText && !showInput && (
@@ -428,12 +494,17 @@ export default function App() {
                 e.preventDefault();
                 openSessionMenu();
               }}
-              className="w-12 h-12 rounded-full flex items-center justify-center bg-slate-800 border border-slate-600 text-slate-100 hover:bg-slate-700 transition-colors touch-none select-none"
+              className="relative w-12 h-12 rounded-full flex items-center justify-center bg-slate-800 border border-slate-600 text-slate-100 hover:bg-slate-700 transition-colors touch-none select-none"
               title="Open tmux session selector"
             >
               <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zm0 2v10h16V7H4zm2 2h6v2H6V9zm0 4h9v2H6v-2z" />
               </svg>
+              {totalUnreadCompletions > 0 && (
+                <span className="absolute -top-1 -right-1 min-w-[1.1rem] h-[1.1rem] px-1 rounded-full bg-blue-500 text-[10px] leading-[1.1rem] text-white font-semibold text-center">
+                  {totalUnreadCompletions > 9 ? '9+' : totalUnreadCompletions}
+                </span>
+              )}
             </button>
 
             <MicButton
@@ -454,6 +525,8 @@ export default function App() {
         open={showSessionMenu}
         sessions={tmuxSessions}
         activeSession={activeTmuxSession || null}
+        statusBySession={tmuxStatusBySession}
+        unreadCompletions={tmuxUnreadCompletions}
         onSelectSession={handleSelectTmuxSession}
         onCreateClaude={handleCreateClaudeSession}
         onCreateCodex={handleCreateCodexSession}
