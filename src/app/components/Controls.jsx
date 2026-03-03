@@ -5,8 +5,8 @@ function StatusBadge({ label, connected }) {
     <span
       className={`px-2 py-0.5 rounded text-[0.65rem] font-medium ${
         connected
-          ? 'bg-emerald-900/50 text-emerald-400 border border-emerald-700/30'
-          : 'bg-red-900/50 text-red-400 border border-red-700/30'
+          ? 'bg-cyan-900/30 text-cyan-300 border border-cyan-700/30'
+          : 'bg-rose-900/30 text-rose-300 border border-rose-700/30'
       }`}
     >
       {label}
@@ -29,7 +29,7 @@ export default function Controls({
 
       <button
         onClick={onRefresh}
-        className="px-2 py-0.5 rounded text-[0.65rem] bg-slate-700/50 text-slate-400 border border-slate-600/30 hover:bg-blue-600 hover:text-white hover:border-blue-500 transition-colors"
+        className="px-2 py-0.5 rounded text-[0.65rem] bg-slate-800/70 text-slate-300 border border-slate-700/50 hover:bg-slate-700 hover:text-white hover:border-slate-500 transition-colors"
       >
         Refresh
       </button>

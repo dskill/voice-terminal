@@ -15,7 +15,7 @@ export default function TranscriptArea({ messages, streamingMessage }) {
   return (
     <div
       ref={areaRef}
-      className="flex-1 overflow-y-auto rounded-xl bg-slate-950/60 border border-slate-800/50 p-4 min-h-[100px]"
+      className="flex-1 overflow-y-auto rounded-xl bg-slate-900/55 border border-slate-800/80 p-4 min-h-[100px]"
     >
       {messages.map((msg, i) => (
         <Message
@@ -40,7 +40,7 @@ export default function TranscriptArea({ messages, streamingMessage }) {
       )}
 
       {messages.length === 0 && !streamingMessage && (
-        <div className="text-center text-slate-600 py-12">
+        <div className="text-center text-slate-500 py-12">
           <div className="text-4xl mb-3">🎙</div>
           <div className="text-sm">Tap the mic button to start talking</div>
         </div>

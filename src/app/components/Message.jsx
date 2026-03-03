@@ -20,10 +20,10 @@ function formatCost(cost) {
 }
 
 const typeStyles = {
-  user: 'bg-blue-950/40 border-l-blue-500',
-  assistant: 'bg-emerald-950/30 border-l-emerald-500',
-  error: 'bg-red-950/30 border-l-red-500',
-  status: 'bg-slate-800/50 border-l-violet-500 italic',
+  user: 'bg-slate-900/70 border-l-cyan-500',
+  assistant: 'bg-slate-900/55 border-l-teal-400',
+  error: 'bg-rose-950/25 border-l-rose-400',
+  status: 'bg-slate-900/65 border-l-indigo-400 italic',
 };
 
 const typeLabels = {
@@ -75,7 +75,7 @@ export default function Message({ type, content, spokenSummary, metadata, toolCa
   const timelineContent = renderTimeline(timeline, isStreaming);
 
   return (
-    <div className={`rounded-lg border-l-[3px] p-3 mb-3 ${style} ${isStreaming ? 'border-l-amber-500' : ''}`}>
+    <div className={`rounded-lg border-l-[3px] p-3 mb-3 ${style} ${isStreaming ? 'border-l-cyan-400' : ''}`}>
       <div className="text-[0.65rem] uppercase tracking-wider text-slate-500 mb-1">{label}</div>
 
       {!timelineContent && toolCalls && toolCalls.length > 0 && (
@@ -93,7 +93,7 @@ export default function Message({ type, content, spokenSummary, metadata, toolCa
       )}
 
       {spokenSummary && (
-        <div className="mt-2 pt-2 border-t border-white/5 text-amber-400 text-sm">
+        <div className="mt-2 pt-2 border-t border-white/10 text-amber-300 text-sm">
           <span className="font-semibold">Spoken:</span> {spokenSummary}
         </div>
       )}

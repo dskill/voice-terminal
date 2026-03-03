@@ -275,7 +275,7 @@ function startClaudeSession() {
 
   const projectBinDir = join(__dirname, '..');
 
-  claudeProcess = spawn('claude', args, {
+  const processRef = spawn('claude', args, {
     cwd: process.env.HOME,
     env: {
       ...process.env,
@@ -283,9 +283,10 @@ function startClaudeSession() {
     },
     stdio: ['pipe', 'pipe', 'pipe']
   });
+  claudeProcess = processRef;
 
   // Read stdout line by line (each line is a JSON message)
-  const rl = createInterface({ input: claudeProcess.stdout });
+  const rl = createInterface({ input: processRef.stdout });
 
   rl.on('line', (line) => {
     if (!line.trim()) return;
@@ -298,11 +299,15 @@ function startClaudeSession() {
     }
   });
 
-  claudeProcess.stderr.on('data', (data) => {
+  processRef.stderr.on('data', (data) => {
     console.log('Claude stderr:', data.toString());
   });
 
-  claudeProcess.on('close', (code) => {
+  processRef.on('close', (code) => {
+    if (claudeProcess !== processRef) {
+      console.log(`Stale Claude process closed with code ${code}`);
+      return;
+    }
     console.log(`Claude process exited with code ${code}`);
     claudeProcess = null;
     claudeReady = false;
@@ -310,7 +315,11 @@ function startClaudeSession() {
     broadcastToClients({ type: 'session-ended', code });
   });
 
-  claudeProcess.on('error', (err) => {
+  processRef.on('error', (err) => {
+    if (claudeProcess !== processRef) {
+      console.log(`Stale Claude process error: ${err.message}`);
+      return;
+    }
     console.error('Claude process error:', err);
     claudeProcess = null;
     claudeReady = false;
@@ -324,7 +333,7 @@ function startClaudeSession() {
       request_id: `init-${Date.now()}`,
       request: { subtype: 'initialize' }
     };
-    claudeProcess.stdin.write(`${JSON.stringify(initMessage)}\n`);
+    processRef.stdin.write(`${JSON.stringify(initMessage)}\n`);
   } catch (err) {
     console.warn('Failed to send Claude initialize handshake:', err.message);
   }

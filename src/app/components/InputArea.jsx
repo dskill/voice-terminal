@@ -22,14 +22,14 @@ export default function InputArea({ value, onChange, onSend, onCancel, visible }
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={handleKeyDown}
         placeholder="Tap to edit..."
-        className="flex-1 px-4 py-3 rounded-lg border border-blue-500/50 bg-slate-950 text-slate-100 text-base font-sans resize-none min-h-[60px] max-h-[150px] overflow-y-auto focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400/30 placeholder:text-slate-600"
+        className="flex-1 px-4 py-3 rounded-lg border border-slate-700 bg-slate-900 text-slate-100 text-base font-sans resize-none min-h-[60px] max-h-[150px] overflow-y-auto focus:outline-none focus:border-cyan-500/60 focus:ring-1 focus:ring-cyan-500/30 placeholder:text-slate-500"
       />
       <button
         onPointerDown={(e) => {
           e.preventDefault();
           onSend();
         }}
-        className="mt-2 w-9 h-9 flex items-center justify-center rounded-full bg-blue-600 hover:bg-blue-500 text-white transition-colors touch-none select-none"
+        className="mt-2 w-9 h-9 flex items-center justify-center rounded-full bg-cyan-700 hover:bg-cyan-600 text-white transition-colors touch-none select-none"
       >
         <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
           <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
@@ -40,7 +40,7 @@ export default function InputArea({ value, onChange, onSend, onCancel, visible }
           e.preventDefault();
           onCancel();
         }}
-        className="mt-2 w-8 h-8 flex items-center justify-center rounded-full bg-slate-700 hover:bg-slate-600 text-slate-400 hover:text-white transition-colors touch-none select-none"
+        className="mt-2 w-8 h-8 flex items-center justify-center rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors touch-none select-none"
       >
         <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
           <path d="M18 6L6 18M6 6l12 12" />

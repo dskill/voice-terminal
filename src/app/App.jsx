@@ -2,7 +2,6 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import useWebSocket from './hooks/useWebSocket';
 import useSpeechRecognition from './hooks/useSpeechRecognition';
 import useTTS from './hooks/useTTS';
-import LoadingOverlay from './components/LoadingOverlay';
 import TranscriptArea from './components/TranscriptArea';
 import Controls from './components/Controls';
 import MicButton from './components/MicButton';
@@ -42,7 +41,6 @@ function buildStreamingFromTimeline(timeline, fallbackText = '', fallbackToolCal
 }
 
 export default function App() {
-  const [initialized, setInitialized] = useState(false);
   const [messages, setMessages] = useState([]);
   const [streamingMessage, setStreamingMessage] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -75,6 +73,7 @@ export default function App() {
   const tts = useTTS();
   const ttsMetaRef = useRef(null);
   const wakeLockRef = useRef(null);
+  const recordingControlsRef = useRef(null);
 
   // ---- WebSocket message handlers ----
 
@@ -297,8 +296,6 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!initialized) return;
-
     requestWakeLock();
 
     const onVisibilityChange = () => {
@@ -315,7 +312,7 @@ export default function App() {
         wakeLockRef.current = null;
       }
     };
-  }, [initialized, requestWakeLock]);
+  }, [requestWakeLock]);
 
   useEffect(() => {
     return () => {
@@ -396,6 +393,20 @@ export default function App() {
       startRecording();
     }
   }, [isProcessing, isTranscribing, speech.isListening, startRecording, stopRecording]);
+
+  const abortRecording = useCallback(async () => {
+    if (!speech.isListening) return;
+    try {
+      await speech.stopListening();
+    } catch {
+      // ignore
+    }
+    setIsTranscribing(false);
+    setInputText('');
+    setShowInput(false);
+    setLiveText('Recording discarded');
+    setTimeout(() => setLiveText(''), 1200);
+  }, [speech]);
 
   // ---- Send / Cancel ----
 
@@ -519,26 +530,43 @@ export default function App() {
   }, [isProcessing, isTranscribing]);
 
   useEffect(() => {
+    if (!speech.isListening) return undefined;
+
+    const handleOutsideCancel = (event) => {
+      const controls = recordingControlsRef.current;
+      if (!controls) return;
+      if (controls.contains(event.target)) return;
+      abortRecording();
+    };
+
+    document.addEventListener('pointerdown', handleOutsideCancel, true);
+    document.addEventListener('mousedown', handleOutsideCancel, true);
+    document.addEventListener('touchstart', handleOutsideCancel, { capture: true, passive: false });
+
+    return () => {
+      document.removeEventListener('pointerdown', handleOutsideCancel, true);
+      document.removeEventListener('mousedown', handleOutsideCancel, true);
+      document.removeEventListener('touchstart', handleOutsideCancel, true);
+    };
+  }, [speech.isListening, abortRecording]);
+
+  useEffect(() => {
     if (!ws.isConnected) return;
     ws.setTTSEnabled(ttsEnabled);
   }, [ws.isConnected, ws.setTTSEnabled, ttsEnabled]);
 
   // ---- Render ----
 
-  if (!initialized) {
-    return <LoadingOverlay onStart={() => setInitialized(true)} />;
-  }
-
   const totalUnreadCompletions = Object.values(tmuxUnreadCompletions).reduce((sum, value) => sum + Number(value || 0), 0);
   const activeTmuxStatus = activeTmuxSession ? tmuxStatusBySession[activeTmuxSession] : null;
   const activeStatusText = activeTmuxStatus?.state === 'working' ? 'Working' : 'Idle';
-  const activeStatusDot = activeTmuxStatus?.state === 'working' ? 'bg-emerald-400' : 'bg-slate-400';
+  const activeStatusDot = activeTmuxStatus?.state === 'working' ? 'bg-emerald-400' : 'bg-slate-500';
 
   return (
-    <div className="h-dvh flex flex-col bg-slate-900 text-slate-100">
+    <div className="h-dvh flex flex-col bg-slate-950 text-slate-100">
       <button
         onClick={() => setShowSettings(true)}
-        className="absolute top-2 right-3 z-20 w-9 h-9 rounded-md bg-slate-700/60 text-slate-200 border border-slate-600/40 hover:bg-slate-600 hover:text-white transition-colors flex items-center justify-center"
+        className="absolute top-2 right-3 z-30 w-9 h-9 rounded-md bg-slate-800/85 text-slate-300 border border-slate-600/50 hover:bg-slate-700 hover:text-white transition-colors flex items-center justify-center"
         title="Open settings"
       >
         <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
@@ -546,7 +574,7 @@ export default function App() {
         </svg>
       </button>
 
-      <div className="flex items-center justify-center border-b border-slate-700/50 bg-slate-800/80 backdrop-blur-sm">
+      <div className="relative z-20 flex items-center justify-center border-b border-slate-800/80 bg-slate-900/90 backdrop-blur-sm">
         <Controls
           isConnected={ws.isConnected}
           claudeRunning={ws.claudeRunning}
@@ -557,7 +585,10 @@ export default function App() {
       <div className="flex-1 flex flex-col p-4 overflow-hidden min-h-0">
         <TranscriptArea messages={messages} streamingMessage={streamingMessage} />
 
-        <div className="flex-shrink-0 flex flex-col items-center gap-3 pt-4 border-t border-slate-800/50 mt-4">
+        <div
+          className="relative z-20 flex-shrink-0 flex flex-col items-center gap-3 pt-4 border-t border-slate-800/70 mt-4"
+          onPointerDown={(e) => e.stopPropagation()}
+        >
           <div className="text-xs text-slate-500 text-center flex items-center gap-2">
             <span>Active tmux: {activeTmuxSession || 'none'}</span>
             {activeTmuxSession && (
@@ -567,14 +598,14 @@ export default function App() {
               </>
             )}
             {doneFlashVisible && activeTmuxSession && (
-              <span className="px-1.5 py-0.5 rounded bg-blue-600/80 text-blue-50 text-[10px] font-semibold">
+              <span className="px-1.5 py-0.5 rounded bg-cyan-600/85 text-cyan-50 text-[10px] font-semibold">
                 Done
               </span>
             )}
           </div>
 
           {liveText && !showInput && (
-            <div className="text-sm text-slate-400 text-center min-h-[1.5em] px-4">
+            <div className="text-sm text-slate-300 text-center min-h-[1.5em] px-4">
               {liveText}
             </div>
           )}
@@ -588,20 +619,20 @@ export default function App() {
           />
 
           {!showInput && (
-            <div className="flex items-center gap-4">
+            <div ref={recordingControlsRef} className="flex items-center gap-4">
               <button
                 onPointerDown={(e) => {
                   e.preventDefault();
                   openSessionMenu();
                 }}
-                className="relative w-12 h-12 rounded-full flex items-center justify-center bg-slate-800 border border-slate-600 text-slate-100 hover:bg-slate-700 transition-colors touch-none select-none"
+                className="relative w-12 h-12 rounded-full flex items-center justify-center bg-slate-900 border border-slate-700 text-slate-200 hover:bg-slate-800 transition-colors touch-none select-none"
                 title="Open tmux session selector"
               >
                 <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
                   <path d="M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zm0 2v10h16V7H4zm2 2h6v2H6V9zm0 4h9v2H6v-2z" />
                 </svg>
                 {totalUnreadCompletions > 0 && (
-                  <span className="absolute -top-1 -right-1 min-w-[1.1rem] h-[1.1rem] px-1 rounded-full bg-blue-500 text-[10px] leading-[1.1rem] text-white font-semibold text-center">
+                  <span className="absolute -top-1 -right-1 min-w-[1.1rem] h-[1.1rem] px-1 rounded-full bg-cyan-500 text-[10px] leading-[1.1rem] text-white font-semibold text-center">
                     {totalUnreadCompletions > 9 ? '9+' : totalUnreadCompletions}
                   </span>
                 )}
@@ -623,7 +654,7 @@ export default function App() {
                   e.preventDefault();
                   openKeyboardInput();
                 }}
-                className="w-12 h-12 rounded-full flex items-center justify-center bg-slate-800 border border-slate-600 text-slate-100 hover:bg-slate-700 transition-colors touch-none select-none"
+                className="w-12 h-12 rounded-full flex items-center justify-center bg-slate-900 border border-slate-700 text-slate-200 hover:bg-slate-800 transition-colors touch-none select-none"
                 title="Type input"
               >
                 <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
