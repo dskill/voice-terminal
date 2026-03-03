@@ -5,7 +5,6 @@ import { spawn, execFile } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync, writeFileSync, unlinkSync } from 'fs';
-import { promises as fsp } from 'fs';
 import { createInterface } from 'readline';
 import { tmpdir } from 'os';
 import { loadTTSModel, isTTSReady, synthesize } from './tts.js';
@@ -48,7 +47,6 @@ let sttReady = false;
 let sttPending = new Map();
 let tmuxStatusInterval = null;
 let lastTmuxStatusJson = '';
-const TMUX_BROKER_STATE_DIR = join(tmpdir(), 'voice-terminal-tmux-broker', 'states');
 
 function execFileAsync(command, args) {
   return new Promise((resolve, reject) => {
@@ -569,59 +567,33 @@ async function synthesizeAndBroadcastAudio(text, messageId = null) {
   }
 }
 
-// ============================================
-// TMux Agent Status Polling
-// ============================================
-
-function aggregateSessionStatus(states) {
-  const bySession = new Map();
-  for (const state of states) {
-    if (!state?.session || !state?.paneId) continue;
-    const session = state.session;
-    const existing = bySession.get(session) || {
-      session,
-      state: 'idle',
-      completionCount: 0,
-      lastDoneAt: 0,
-      panes: []
-    };
-    const paneState = state.state === 'working' ? 'working' : 'idle';
-    if (paneState === 'working') {
-      existing.state = 'working';
-    }
-    existing.completionCount += Number(state.completionCount || 0);
-    existing.lastDoneAt = Math.max(existing.lastDoneAt, Number(state.lastDoneAt || 0));
-    existing.panes.push({
-      paneId: state.paneId,
-      state: paneState,
-      completionCount: Number(state.completionCount || 0),
-      lastDoneAt: Number(state.lastDoneAt || 0),
-      lastActivityAt: Number(state.lastActivityAt || 0)
-    });
-    bySession.set(session, existing);
-  }
-
-  return [...bySession.values()].sort((a, b) => a.session.localeCompare(b.session));
-}
-
 async function readTmuxAgentStatus() {
   try {
-    const files = await fsp.readdir(TMUX_BROKER_STATE_DIR);
-    const states = [];
-    for (const file of files) {
-      if (!file.endsWith('.json')) continue;
-      const fullPath = join(TMUX_BROKER_STATE_DIR, file);
-      try {
-        const raw = await fsp.readFile(fullPath, 'utf8');
-        states.push(JSON.parse(raw));
-      } catch {
-        // Ignore transient/invalid state writes
-      }
-    }
-    return aggregateSessionStatus(states);
+    const brokerScript = join(__dirname, 'tmux-broker.js');
+    const raw = await execFileAsync('node', [
+      brokerScript,
+      'status',
+      '--all',
+      '--all-panes',
+      '--json'
+    ]);
+    const parsed = JSON.parse(raw || '{}');
+    const sessions = Array.isArray(parsed?.sessions) ? parsed.sessions : [];
+    return sessions.map((session) => ({
+      session: session.session,
+      state: session.state === 'working' ? 'working' : 'idle',
+      completionCount: Number(session.completionCount || 0),
+      lastDoneAt: Number(session.lastDoneAt || 0),
+      panes: Array.isArray(session.panes) ? session.panes.map((pane) => ({
+        paneId: pane.paneId,
+        state: pane.state === 'working' ? 'working' : 'idle',
+        completionCount: Number(pane.completionCount || 0),
+        lastDoneAt: Number(pane.lastDoneAt || 0),
+        lastActivityAt: Number(pane.lastActivityAt || 0)
+      })) : []
+    }));
   } catch (err) {
-    if (err?.code === 'ENOENT') return [];
-    console.warn(`[tmux-status] Failed to read broker states: ${err.message}`);
+    console.warn(`[tmux-status] Failed to get broker status: ${err.message}`);
     return [];
   }
 }
