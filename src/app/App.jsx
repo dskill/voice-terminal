@@ -54,6 +54,10 @@ export default function App() {
   const [autoSend, setAutoSend] = useState(() => {
     return localStorage.getItem('voice-terminal-auto-send') === '1';
   });
+  const [ttsEnabled, setTTSEnabled] = useState(() => {
+    const value = localStorage.getItem('voice-terminal-tts-enabled');
+    return value == null ? true : value === '1';
+  });
   const [tmuxSessions, setTmuxSessions] = useState([]);
   const [showSessionMenu, setShowSessionMenu] = useState(false);
   const [activeTmuxSession, setActiveTmuxSession] = useState(() => {
@@ -419,6 +423,15 @@ export default function App() {
     localStorage.setItem('voice-terminal-auto-send', enabled ? '1' : '0');
   }, []);
 
+  const toggleTTSEnabled = useCallback((enabled) => {
+    const value = !!enabled;
+    setTTSEnabled(value);
+    localStorage.setItem('voice-terminal-tts-enabled', value ? '1' : '0');
+    if (!value) {
+      tts.stop();
+    }
+  }, [tts]);
+
   const cancelMessage = useCallback(() => {
     setShowInput(false);
     setInputText('');
@@ -504,6 +517,11 @@ export default function App() {
     setShowInput(true);
     setLiveText('Type your message and send');
   }, [isProcessing, isTranscribing]);
+
+  useEffect(() => {
+    if (!ws.isConnected) return;
+    ws.setTTSEnabled(ttsEnabled);
+  }, [ws.isConnected, ws.setTTSEnabled, ttsEnabled]);
 
   // ---- Render ----
 
@@ -634,6 +652,8 @@ export default function App() {
         open={showSettings}
         autoSend={autoSend}
         onToggleAutoSend={toggleAutoSend}
+        ttsEnabled={ttsEnabled}
+        onToggleTTSEnabled={toggleTTSEnabled}
         onRestartSession={restartSession}
         onClose={() => setShowSettings(false)}
       />

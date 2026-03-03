@@ -50,6 +50,19 @@ let sttPending = new Map();
 let tmuxStatusInterval = null;
 let lastTmuxStatusJson = '';
 
+function getTTSEnabledClients(targetClient = null) {
+  if (targetClient) {
+    return targetClient.readyState === 1 && targetClient.ttsEnabled !== false ? [targetClient] : [];
+  }
+  const clients = [];
+  for (const client of connectedClients) {
+    if (client.readyState === 1 && client.ttsEnabled !== false) {
+      clients.push(client);
+    }
+  }
+  return clients;
+}
+
 function execFileAsync(command, args) {
   return new Promise((resolve, reject) => {
     execFile(command, args, { encoding: 'utf8' }, (error, stdout, stderr) => {
@@ -512,7 +525,7 @@ function handleClaudeMessage(msg) {
     });
 
     // Synthesize TTS audio asynchronously
-    if (spokenSummary && isTTSReady() && connectedClients.size > 0) {
+    if (spokenSummary && isTTSReady() && getTTSEnabledClients().length > 0) {
       synthesizeAndBroadcastAudio(spokenSummary, assistantMessage.id);
     }
   } else if (msg.type === 'error') {
@@ -586,9 +599,10 @@ function broadcastToClients(message) {
   }
 }
 
-async function synthesizeAndBroadcastAudio(text, messageId = null) {
+async function synthesizeAndBroadcastAudio(text, messageId = null, targetClient = null) {
   try {
-    if (connectedClients.size === 0) {
+    const ttsClients = getTTSEnabledClients(targetClient);
+    if (ttsClients.length === 0) {
       return;
     }
 
@@ -597,19 +611,18 @@ async function synthesizeAndBroadcastAudio(text, messageId = null) {
     console.log(`[TTS] Done: ${audio.length} samples @ ${samplingRate}Hz`);
 
     // Send metadata first
-    broadcastToClients({ type: 'tts-audio', samplingRate, numSamples: audio.length });
+    const meta = JSON.stringify({ type: 'tts-audio', samplingRate, numSamples: audio.length });
+    for (const client of ttsClients) {
+      client.send(meta);
+    }
 
     // Send raw PCM as binary
     const buffer = Buffer.from(audio.buffer);
-    let delivered = 0;
-    for (const client of connectedClients) {
-      if (client.readyState === 1) {
-        client.send(buffer);
-        delivered += 1;
-      }
+    for (const client of ttsClients) {
+      client.send(buffer);
     }
 
-    if (delivered > 0 && messageId != null) {
+    if (messageId != null) {
       const msg = conversationHistory.find((m) => m.id === messageId);
       if (msg) {
         msg.spokenDelivered = true;
@@ -681,6 +694,7 @@ function stopTmuxStatusPolling() {
 
 wss.on('connection', (ws) => {
   console.log('Client connected');
+  ws.ttsEnabled = true;
   connectedClients.add(ws);
 
   // Send current session status
@@ -724,7 +738,7 @@ wss.on('connection', (ws) => {
           (m) => m.type === 'assistant' && m.spokenSummary && !m.spokenDelivered
         );
         for (const pending of pendingSpeech) {
-          synthesizeAndBroadcastAudio(pending.spokenSummary, pending.id);
+          synthesizeAndBroadcastAudio(pending.spokenSummary, pending.id, ws);
         }
 
       } else if (message.type === 'clear-history') {
@@ -750,6 +764,9 @@ wss.on('connection', (ws) => {
           running: claudeReady,
           hasProcess: !!claudeProcess
         }));
+
+      } else if (message.type === 'set-tts-enabled') {
+        ws.ttsEnabled = message.enabled !== false;
 
       } else if (message.type === 'list-tmux-sessions') {
         listTmuxSessions()

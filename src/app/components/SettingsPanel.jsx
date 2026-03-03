@@ -1,6 +1,14 @@
 import React from 'react';
 
-export default function SettingsPanel({ open, autoSend, onToggleAutoSend, onRestartSession, onClose }) {
+export default function SettingsPanel({
+  open,
+  autoSend,
+  onToggleAutoSend,
+  ttsEnabled,
+  onToggleTTSEnabled,
+  onRestartSession,
+  onClose
+}) {
   if (!open) return null;
 
   return (
@@ -25,6 +33,19 @@ export default function SettingsPanel({ open, autoSend, onToggleAutoSend, onRest
                 type="checkbox"
                 checked={autoSend}
                 onChange={(e) => onToggleAutoSend(e.target.checked)}
+                className="w-4 h-4 accent-emerald-500"
+              />
+            </label>
+
+            <label className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-slate-800/70 border border-slate-700">
+              <div>
+                <div className="text-sm text-slate-100 font-medium">Enable TTS</div>
+                <div className="text-xs text-slate-400">Play spoken response audio for Claude replies.</div>
+              </div>
+              <input
+                type="checkbox"
+                checked={ttsEnabled}
+                onChange={(e) => onToggleTTSEnabled(e.target.checked)}
                 className="w-4 h-4 accent-emerald-500"
               />
             </label>
