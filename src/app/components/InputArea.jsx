@@ -27,6 +27,17 @@ export default function InputArea({ value, onChange, onSend, onCancel, visible }
       <button
         onPointerDown={(e) => {
           e.preventDefault();
+          onSend();
+        }}
+        className="mt-2 w-9 h-9 flex items-center justify-center rounded-full bg-blue-600 hover:bg-blue-500 text-white transition-colors touch-none select-none"
+      >
+        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+        </svg>
+      </button>
+      <button
+        onPointerDown={(e) => {
+          e.preventDefault();
           onCancel();
         }}
         className="mt-2 w-8 h-8 flex items-center justify-center rounded-full bg-slate-700 hover:bg-slate-600 text-slate-400 hover:text-white transition-colors touch-none select-none"

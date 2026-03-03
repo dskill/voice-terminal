@@ -138,7 +138,6 @@ export default function App() {
       setLiveText(`Attached to tmux session ${data.name}`);
       setTmuxUnreadCompletions((prev) => ({ ...prev, [data.name]: 0 }));
       ws.listTmuxSessions();
-      ws.summarizeTmuxSession(data.name);
       setShowSessionMenu(false);
     });
 
@@ -277,7 +276,7 @@ export default function App() {
     ws.setHandler('history-cleared', () => {
       // handled by local state clear
     });
-  }, [ws.setHandler, ws.listTmuxSessions, ws.summarizeTmuxSession, addMessage, tts.playAudio, activeTmuxSession]);
+  }, [ws.setHandler, ws.listTmuxSessions, addMessage, tts.playAudio, activeTmuxSession]);
 
   const requestWakeLock = useCallback(async () => {
     if (!('wakeLock' in navigator)) return;
@@ -450,7 +449,6 @@ export default function App() {
   }, [ws]);
 
   const handleSelectTmuxSession = useCallback((sessionName) => {
-    const previous = activeTmuxSession || '';
     const next = sessionName || '';
     setActiveTmuxSession(next);
     if (next) {
@@ -461,15 +459,20 @@ export default function App() {
         completionSeenRef.current[next] = status.completionCount;
       }
       setTmuxUnreadCompletions((prev) => ({ ...prev, [next]: 0 }));
-      if (next !== previous) {
-        ws.summarizeTmuxSession(next);
-      }
     } else {
       localStorage.removeItem('voice-terminal-active-tmux');
       setLiveText('Detached from tmux session');
     }
     setShowSessionMenu(false);
-  }, [tmuxStatusBySession, ws, activeTmuxSession]);
+  }, [tmuxStatusBySession]);
+
+  const handleReviewTmuxSession = useCallback((sessionName) => {
+    const next = String(sessionName || '').trim();
+    if (!next) return;
+    ws.summarizeTmuxSession(next);
+    setLiveText(`Reviewing tmux session ${next}...`);
+    setShowSessionMenu(false);
+  }, [ws]);
 
   const handleCreateClaudeSession = useCallback(() => {
     ws.createTmuxSession('claude');
@@ -496,6 +499,12 @@ export default function App() {
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [isProcessing, isTranscribing, showInput, toggleRecording]);
 
+  const openKeyboardInput = useCallback(() => {
+    if (isProcessing || isTranscribing) return;
+    setShowInput(true);
+    setLiveText('Type your message and send');
+  }, [isProcessing, isTranscribing]);
+
   // ---- Render ----
 
   if (!initialized) {
@@ -509,12 +518,21 @@ export default function App() {
 
   return (
     <div className="h-dvh flex flex-col bg-slate-900 text-slate-100">
+      <button
+        onClick={() => setShowSettings(true)}
+        className="absolute top-2 right-3 z-20 w-9 h-9 rounded-md bg-slate-700/60 text-slate-200 border border-slate-600/40 hover:bg-slate-600 hover:text-white transition-colors flex items-center justify-center"
+        title="Open settings"
+      >
+        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M4 6h16v2H4V6zm0 5h16v2H4v-2zm0 5h16v2H4v-2z" />
+        </svg>
+      </button>
+
       <div className="flex items-center justify-center border-b border-slate-700/50 bg-slate-800/80 backdrop-blur-sm">
         <Controls
           isConnected={ws.isConnected}
           claudeRunning={ws.claudeRunning}
           onRefresh={() => location.reload()}
-          onOpenSettings={() => setShowSettings(true)}
         />
       </div>
 
@@ -551,36 +569,51 @@ export default function App() {
             visible={showInput}
           />
 
-          <div className="flex items-center gap-4">
-            <button
-              onPointerDown={(e) => {
-                e.preventDefault();
-                openSessionMenu();
-              }}
-              className="relative w-12 h-12 rounded-full flex items-center justify-center bg-slate-800 border border-slate-600 text-slate-100 hover:bg-slate-700 transition-colors touch-none select-none"
-              title="Open tmux session selector"
-            >
-              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zm0 2v10h16V7H4zm2 2h6v2H6V9zm0 4h9v2H6v-2z" />
-              </svg>
-              {totalUnreadCompletions > 0 && (
-                <span className="absolute -top-1 -right-1 min-w-[1.1rem] h-[1.1rem] px-1 rounded-full bg-blue-500 text-[10px] leading-[1.1rem] text-white font-semibold text-center">
-                  {totalUnreadCompletions > 9 ? '9+' : totalUnreadCompletions}
-                </span>
-              )}
-            </button>
+          {!showInput && (
+            <div className="flex items-center gap-4">
+              <button
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  openSessionMenu();
+                }}
+                className="relative w-12 h-12 rounded-full flex items-center justify-center bg-slate-800 border border-slate-600 text-slate-100 hover:bg-slate-700 transition-colors touch-none select-none"
+                title="Open tmux session selector"
+              >
+                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zm0 2v10h16V7H4zm2 2h6v2H6V9zm0 4h9v2H6v-2z" />
+                </svg>
+                {totalUnreadCompletions > 0 && (
+                  <span className="absolute -top-1 -right-1 min-w-[1.1rem] h-[1.1rem] px-1 rounded-full bg-blue-500 text-[10px] leading-[1.1rem] text-white font-semibold text-center">
+                    {totalUnreadCompletions > 9 ? '9+' : totalUnreadCompletions}
+                  </span>
+                )}
+              </button>
 
-            <MicButton
-              isRecording={speech.isListening}
-              audioLevel={speech.audioLevel}
-              isProcessing={isProcessing}
-              isSendMode={showInput}
-              disabled={!ws.claudeRunning || isTranscribing}
-              onClick={showInput ? sendMessage : toggleRecording}
-              onCancel={cancelProcessing}
-              onLongPress={openSessionMenu}
-            />
-          </div>
+              <MicButton
+                isRecording={speech.isListening}
+                audioLevel={speech.audioLevel}
+                isProcessing={isProcessing}
+                isSendMode={false}
+                disabled={!ws.claudeRunning || isTranscribing}
+                onClick={toggleRecording}
+                onCancel={cancelProcessing}
+                onLongPress={openSessionMenu}
+              />
+
+              <button
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  openKeyboardInput();
+                }}
+                className="w-12 h-12 rounded-full flex items-center justify-center bg-slate-800 border border-slate-600 text-slate-100 hover:bg-slate-700 transition-colors touch-none select-none"
+                title="Type input"
+              >
+                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M3 6h18a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2zm0 2v8h18V8H3zm2 2h2v2H5v-2zm3 0h2v2H8v-2zm3 0h2v2h-2v-2zm3 0h2v2h-2v-2zm3 0h2v2h-2v-2zM5 13h10v2H5v-2z" />
+                </svg>
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -591,6 +624,7 @@ export default function App() {
         statusBySession={tmuxStatusBySession}
         unreadCompletions={tmuxUnreadCompletions}
         onSelectSession={handleSelectTmuxSession}
+        onReviewSession={handleReviewTmuxSession}
         onCreateClaude={handleCreateClaudeSession}
         onCreateCodex={handleCreateCodexSession}
         onClose={() => setShowSessionMenu(false)}
