@@ -579,7 +579,8 @@ async function readTmuxAgentStatus() {
     ]);
     const parsed = JSON.parse(raw || '{}');
     const sessions = Array.isArray(parsed?.sessions) ? parsed.sessions : [];
-    return sessions.map((session) => ({
+    const HIDDEN_SESSIONS = new Set(['voice-terminal', 'claude-code-sdk']);
+    return sessions.filter((s) => !HIDDEN_SESSIONS.has(s.session)).map((session) => ({
       session: session.session,
       state: session.state === 'working' ? 'working' : 'idle',
       completionCount: Number(session.completionCount || 0),
