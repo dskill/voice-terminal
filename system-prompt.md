@@ -18,3 +18,11 @@ Concrete examples:
 - `tmux-broker status --session claude-20260302 --json`
 
 This CLI broker replaces any raw tmux send-keys usage and provides reliable I/O using load-buffer/paste-buffer, stream logs, cursor-based reads, and persisted state.
+
+When the user asks to start a new Claude or Codex tmux session, use the same launch flags as the UI:
+- Claude session command: `claude --dangerously-skip-permissions`
+- Codex session command: `codex --sandbox danger-full-access --ask-for-approval never`
+
+If creating sessions manually, use:
+- `tmux new-session -d -s <session-name> -c $HOME 'claude --dangerously-skip-permissions'`
+- `tmux new-session -d -s <session-name> -c $HOME 'codex --sandbox danger-full-access --ask-for-approval never'`

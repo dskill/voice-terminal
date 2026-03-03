@@ -40,6 +40,8 @@ let sessionMetadata = {}; // Store session info from init message
 let currentTurnEvents = []; // Collect all events for current turn
 let cancelledTurn = false; // Soft-cancel: ignore remaining output for this turn
 let currentTurnToolCalls = [];
+let currentTurnTimeline = [];
+let currentTurnSeq = 0;
 let inFlightTurn = null;
 let nextMessageId = 1;
 let sttWorkerProcess = null;
@@ -240,6 +242,8 @@ function startClaudeSession() {
   // Clear history when starting new session
   conversationHistory = [];
   currentTurnToolCalls = [];
+  currentTurnTimeline = [];
+  currentTurnSeq = 0;
   inFlightTurn = null;
   nextMessageId = 1;
   sessionInitialized = false;
@@ -340,6 +344,8 @@ function stopClaudeSession() {
   sessionInitialized = false;
   conversationHistory = [];
   currentTurnToolCalls = [];
+  currentTurnTimeline = [];
+  currentTurnSeq = 0;
   inFlightTurn = null;
 }
 
@@ -384,12 +390,21 @@ function handleClaudeMessage(msg) {
         } else if (block.type === 'tool_use') {
           // Tool call - broadcast it
           console.log('Tool call:', block.name, JSON.stringify(block.input).slice(0, 100));
+          const timelineEvent = {
+            type: 'tool',
+            seq: ++currentTurnSeq,
+            toolName: block.name,
+            input: block.input
+          };
           currentTurnToolCalls.push({ toolName: block.name, input: block.input });
+          appendTurnTimeline(timelineEvent);
           if (inFlightTurn) {
             inFlightTurn.toolCalls.push({ toolName: block.name, input: block.input });
+            inFlightTurn.timeline.push(timelineEvent);
           }
           broadcastToClients({
             type: 'tool-call',
+            seq: timelineEvent.seq,
             toolName: block.name,
             toolId: block.id,
             input: block.input
@@ -407,11 +422,25 @@ function handleClaudeMessage(msg) {
     const event = msg.event;
     if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
       responseBuffer += event.delta.text;
+      const timelineEvent = {
+        type: 'text',
+        seq: ++currentTurnSeq,
+        text: event.delta.text
+      };
+      appendTurnTimeline(timelineEvent);
       if (inFlightTurn) {
         inFlightTurn.partialText += event.delta.text;
+        const timelineLast = inFlightTurn.timeline[inFlightTurn.timeline.length - 1];
+        if (timelineEvent.type === 'text' && timelineLast?.type === 'text') {
+          timelineLast.text = `${timelineLast.text || ''}${timelineEvent.text || ''}`;
+          timelineLast.seq = timelineEvent.seq;
+        } else {
+          inFlightTurn.timeline.push({ ...timelineEvent });
+        }
       }
       broadcastToClients({
         type: 'partial',
+        seq: timelineEvent.seq,
         text: event.delta.text
       });
     }
@@ -424,6 +453,8 @@ function handleClaudeMessage(msg) {
     if (wasCancelled) {
       responseBuffer = '';
       currentTurnToolCalls = [];
+      currentTurnTimeline = [];
+      currentTurnSeq = 0;
       inFlightTurn = null;
       console.log('Cancelled turn finished draining, session ready for next message');
       return;
@@ -459,12 +490,15 @@ function handleClaudeMessage(msg) {
       content: fullResponse,
       spokenSummary,
       toolCalls: currentTurnToolCalls,
+      timeline: currentTurnTimeline,
       spokenDelivered: !spokenSummary,
       metadata,
       timestamp: Date.now()
     };
     conversationHistory.push(assistantMessage);
     currentTurnToolCalls = [];
+    currentTurnTimeline = [];
+    currentTurnSeq = 0;
     inFlightTurn = null;
 
     broadcastToClients({
@@ -472,6 +506,7 @@ function handleClaudeMessage(msg) {
       fullResponse,
       spokenSummary,
       toolCalls: assistantMessage.toolCalls,
+      timeline: assistantMessage.timeline,
       model: sessionMetadata.model,
       metadata
     });
@@ -498,9 +533,22 @@ function extractSpokenSummary(response) {
   return paragraphs[paragraphs.length - 1].slice(0, 500);
 }
 
+function appendTurnTimeline(event) {
+  const last = currentTurnTimeline[currentTurnTimeline.length - 1];
+  if (event.type === 'text' && last?.type === 'text') {
+    last.text = `${last.text || ''}${event.text || ''}`;
+    last.seq = event.seq ?? last.seq;
+    return;
+  }
+  currentTurnTimeline.push(event);
+}
+
 function sendToClaud(userMessage) {
   if (!claudeProcess || !claudeReady) {
     return { error: 'Claude session not running' };
+  }
+  if (inFlightTurn) {
+    return { error: 'Claude is still processing the previous request' };
   }
 
   // Format message for stream-json input
@@ -515,11 +563,14 @@ function sendToClaud(userMessage) {
   cancelledTurn = false;
   responseBuffer = '';
   currentTurnToolCalls = [];
+  currentTurnTimeline = [];
+  currentTurnSeq = 0;
   inFlightTurn = {
     userMessage,
     startedAt: Date.now(),
     partialText: '',
-    toolCalls: []
+    toolCalls: [],
+    timeline: []
   };
   claudeProcess.stdin.write(JSON.stringify(message) + '\n');
 
@@ -730,6 +781,36 @@ wss.on('connection', (ws) => {
               message: `Failed to create tmux session: ${err.message}`
             }));
           });
+
+      } else if (message.type === 'summarize-tmux-session') {
+        const sessionName = String(message.sessionName || '').trim();
+        if (!sessionName) {
+          ws.send(JSON.stringify({
+            type: 'error',
+            message: 'Missing tmux session name to summarize'
+          }));
+          return;
+        }
+
+        const summaryPrompt = [
+          `The user switched context to tmux session "${sessionName}".`,
+          'Review recent activity in this session now.',
+          'Use tmux-broker commands (read-stream/read-snapshot/status) to understand what happened most recently.',
+          'Then provide a concise summary suitable for speech output and include [SPOKEN: ...].'
+        ].join(' ');
+
+        ws.send(JSON.stringify({
+          type: 'status',
+          message: `Reviewing tmux session ${sessionName}...`
+        }));
+
+        const result = sendToClaud(summaryPrompt);
+        if (result.error) {
+          ws.send(JSON.stringify({
+            type: 'error',
+            message: result.error
+          }));
+        }
 
       } else if (message.type === 'voice-command') {
         const transcript = message.transcript;

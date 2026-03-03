@@ -10,7 +10,7 @@ export default function TranscriptArea({ messages, streamingMessage }) {
         areaRef.current.scrollTop = areaRef.current.scrollHeight;
       });
     }
-  }, [messages, streamingMessage?.text, streamingMessage?.toolCalls?.length]);
+  }, [messages, streamingMessage?.text, streamingMessage?.toolCalls?.length, streamingMessage?.timeline?.length]);
 
   return (
     <div
@@ -25,6 +25,7 @@ export default function TranscriptArea({ messages, streamingMessage }) {
           spokenSummary={msg.spokenSummary}
           metadata={msg.metadata}
           toolCalls={msg.toolCalls}
+          timeline={msg.timeline}
         />
       ))}
 
@@ -33,6 +34,7 @@ export default function TranscriptArea({ messages, streamingMessage }) {
           type="assistant"
           content={streamingMessage.text}
           toolCalls={streamingMessage.toolCalls}
+          timeline={streamingMessage.timeline}
           isStreaming
         />
       )}

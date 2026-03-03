@@ -33,7 +33,35 @@ const typeLabels = {
   status: 'Status',
 };
 
-export default function Message({ type, content, spokenSummary, metadata, toolCalls, isStreaming }) {
+function renderTimeline(timeline, isStreaming) {
+  if (!Array.isArray(timeline) || timeline.length === 0) return null;
+  return (
+    <div className={isStreaming ? 'opacity-80' : ''}>
+      {timeline.map((event, index) => {
+        if (event.type === 'tool') {
+          return (
+            <div key={`${event.seq || index}-tool`} className="my-2 flex flex-wrap">
+              <ToolCall name={event.toolName} input={event.input} />
+            </div>
+          );
+        }
+        if (event.type === 'text') {
+          return (
+            <div
+              key={`${event.seq || index}-text`}
+              className="whitespace-pre-wrap break-words font-mono text-sm leading-relaxed"
+            >
+              {event.text}
+            </div>
+          );
+        }
+        return null;
+      })}
+    </div>
+  );
+}
+
+export default function Message({ type, content, spokenSummary, metadata, toolCalls, timeline, isStreaming }) {
   const style = typeStyles[type] || typeStyles.status;
   const label = typeLabels[type] || type;
 
@@ -44,11 +72,13 @@ export default function Message({ type, content, spokenSummary, metadata, toolCa
     if (metadata.numTurns) metaParts.push(`${metadata.numTurns} turn${metadata.numTurns > 1 ? 's' : ''}`);
   }
 
+  const timelineContent = renderTimeline(timeline, isStreaming);
+
   return (
     <div className={`rounded-lg border-l-[3px] p-3 mb-3 ${style} ${isStreaming ? 'border-l-amber-500' : ''}`}>
       <div className="text-[0.65rem] uppercase tracking-wider text-slate-500 mb-1">{label}</div>
 
-      {toolCalls && toolCalls.length > 0 && (
+      {!timelineContent && toolCalls && toolCalls.length > 0 && (
         <div className="mb-2 flex flex-wrap">
           {toolCalls.map((tc, i) => (
             <ToolCall key={i} name={tc.toolName} input={tc.input} />
@@ -56,9 +86,11 @@ export default function Message({ type, content, spokenSummary, metadata, toolCa
         </div>
       )}
 
-      <div className={`whitespace-pre-wrap break-words font-mono text-sm leading-relaxed ${isStreaming ? 'opacity-80' : ''}`}>
-        {content}
-      </div>
+      {timelineContent || (
+        <div className={`whitespace-pre-wrap break-words font-mono text-sm leading-relaxed ${isStreaming ? 'opacity-80' : ''}`}>
+          {content}
+        </div>
+      )}
 
       {spokenSummary && (
         <div className="mt-2 pt-2 border-t border-white/5 text-amber-400 text-sm">

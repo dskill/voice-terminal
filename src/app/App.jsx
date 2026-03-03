@@ -8,6 +8,38 @@ import Controls from './components/Controls';
 import MicButton from './components/MicButton';
 import InputArea from './components/InputArea';
 import SessionRadialMenu from './components/SessionRadialMenu';
+import SettingsPanel from './components/SettingsPanel';
+
+function appendTimelineEvent(currentTimeline, incomingEvent) {
+  const next = Array.isArray(currentTimeline) ? [...currentTimeline] : [];
+  const last = next[next.length - 1];
+
+  if (incomingEvent.type === 'text' && last?.type === 'text' && (incomingEvent.seq == null || last.seq == null || incomingEvent.seq >= last.seq)) {
+    next[next.length - 1] = {
+      ...last,
+      text: `${last.text || ''}${incomingEvent.text || ''}`,
+      seq: incomingEvent.seq ?? last.seq
+    };
+    return next;
+  }
+
+  next.push(incomingEvent);
+  next.sort((a, b) => Number(a.seq || 0) - Number(b.seq || 0));
+  return next;
+}
+
+function buildStreamingFromTimeline(timeline, fallbackText = '', fallbackToolCalls = []) {
+  const list = Array.isArray(timeline) ? timeline : [];
+  const text = list.filter((e) => e.type === 'text').map((e) => e.text || '').join('') || fallbackText || '';
+  const toolCalls = list
+    .filter((e) => e.type === 'tool')
+    .map((e) => ({ toolName: e.toolName, input: e.input }));
+  return {
+    text,
+    toolCalls: toolCalls.length > 0 ? toolCalls : (fallbackToolCalls || []),
+    timeline: list
+  };
+}
 
 export default function App() {
   const [initialized, setInitialized] = useState(false);
@@ -18,6 +50,7 @@ export default function App() {
   const [liveText, setLiveText] = useState('');
   const [inputText, setInputText] = useState('');
   const [showInput, setShowInput] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [autoSend, setAutoSend] = useState(() => {
     return localStorage.getItem('voice-terminal-auto-send') === '1';
   });
@@ -40,8 +73,8 @@ export default function App() {
 
   // ---- WebSocket message handlers ----
 
-  const addMessage = useCallback((type, content, spokenSummary, metadata, toolCalls) => {
-    setMessages((prev) => [...prev, { type, content, spokenSummary, metadata, toolCalls }]);
+  const addMessage = useCallback((type, content, spokenSummary, metadata, toolCalls, timeline) => {
+    setMessages((prev) => [...prev, { type, content, spokenSummary, metadata, toolCalls, timeline }]);
   }, []);
 
   useEffect(() => {
@@ -53,6 +86,7 @@ export default function App() {
           spokenSummary: msg.spokenSummary,
           metadata: msg.metadata,
           toolCalls: msg.toolCalls,
+          timeline: msg.timeline,
         }));
         setMessages(restored);
       } else {
@@ -60,10 +94,13 @@ export default function App() {
       }
 
       if (data.inFlightTurn) {
-        setStreamingMessage({
-          text: data.inFlightTurn.partialText || '',
-          toolCalls: data.inFlightTurn.toolCalls || [],
-        });
+        setStreamingMessage(
+          buildStreamingFromTimeline(
+            data.inFlightTurn.timeline || [],
+            data.inFlightTurn.partialText || '',
+            data.inFlightTurn.toolCalls || []
+          )
+        );
         setIsProcessing(true);
         setLiveText('Thinking...');
       } else {
@@ -100,6 +137,7 @@ export default function App() {
       setLiveText(`Attached to tmux session ${data.name}`);
       setTmuxUnreadCompletions((prev) => ({ ...prev, [data.name]: 0 }));
       ws.listTmuxSessions();
+      ws.summarizeTmuxSession(data.name);
       setShowSessionMenu(false);
     });
 
@@ -147,19 +185,27 @@ export default function App() {
 
     ws.setHandler('tool-call', (data) => {
       setStreamingMessage((prev) => {
-        const current = prev || { text: '', toolCalls: [] };
-        return {
-          ...current,
-          toolCalls: [...current.toolCalls, { toolName: data.toolName, input: data.input }],
-        };
+        const current = prev || { text: '', toolCalls: [], timeline: [] };
+        const timeline = appendTimelineEvent(current.timeline, {
+          type: 'tool',
+          seq: data.seq,
+          toolName: data.toolName,
+          input: data.input
+        });
+        return buildStreamingFromTimeline(timeline, current.text, current.toolCalls);
       });
       setLiveText(`Using ${data.toolName}...`);
     });
 
     ws.setHandler('partial', (data) => {
       setStreamingMessage((prev) => {
-        const current = prev || { text: '', toolCalls: [] };
-        return { ...current, text: current.text + data.text };
+        const current = prev || { text: '', toolCalls: [], timeline: [] };
+        const timeline = appendTimelineEvent(current.timeline, {
+          type: 'text',
+          seq: data.seq,
+          text: data.text
+        });
+        return buildStreamingFromTimeline(timeline, current.text + data.text, current.toolCalls);
       });
       setLiveText('Thinking...');
     });
@@ -167,8 +213,9 @@ export default function App() {
     ws.setHandler('response', (data) => {
       // Finalize streaming message into a regular message
       setStreamingMessage((prev) => {
+        const timeline = prev?.timeline || data.timeline || [];
         const toolCalls = prev?.toolCalls || data.toolCalls || [];
-        addMessage('assistant', data.fullResponse, data.spokenSummary, data.metadata, toolCalls);
+        addMessage('assistant', data.fullResponse, data.spokenSummary, data.metadata, toolCalls, timeline);
         return null;
       });
 
@@ -217,7 +264,7 @@ export default function App() {
     ws.setHandler('history-cleared', () => {
       // handled by local state clear
     });
-  }, [ws.setHandler, ws.listTmuxSessions, addMessage, tts.playAudio, activeTmuxSession]);
+  }, [ws.setHandler, ws.listTmuxSessions, ws.summarizeTmuxSession, addMessage, tts.playAudio, activeTmuxSession]);
 
   const requestWakeLock = useCallback(async () => {
     if (!('wakeLock' in navigator)) return;
@@ -381,6 +428,7 @@ export default function App() {
     setInputText('');
     setIsProcessing(false);
     setLiveText('Restarting Claude session...');
+    setShowSettings(false);
   }, [ws]);
 
   const openSessionMenu = useCallback(() => {
@@ -389,6 +437,7 @@ export default function App() {
   }, [ws]);
 
   const handleSelectTmuxSession = useCallback((sessionName) => {
+    const previous = activeTmuxSession || '';
     const next = sessionName || '';
     setActiveTmuxSession(next);
     if (next) {
@@ -399,12 +448,15 @@ export default function App() {
         completionSeenRef.current[next] = status.completionCount;
       }
       setTmuxUnreadCompletions((prev) => ({ ...prev, [next]: 0 }));
+      if (next !== previous) {
+        ws.summarizeTmuxSession(next);
+      }
     } else {
       localStorage.removeItem('voice-terminal-active-tmux');
       setLiveText('Detached from tmux session');
     }
     setShowSessionMenu(false);
-  }, [tmuxStatusBySession]);
+  }, [tmuxStatusBySession, ws, activeTmuxSession]);
 
   const handleCreateClaudeSession = useCallback(() => {
     ws.createTmuxSession('claude');
@@ -448,10 +500,8 @@ export default function App() {
         <Controls
           isConnected={ws.isConnected}
           claudeRunning={ws.claudeRunning}
-          onRestartSession={restartSession}
           onRefresh={() => location.reload()}
-          autoSend={autoSend}
-          onToggleAutoSend={toggleAutoSend}
+          onOpenSettings={() => setShowSettings(true)}
         />
       </div>
 
@@ -531,6 +581,14 @@ export default function App() {
         onCreateClaude={handleCreateClaudeSession}
         onCreateCodex={handleCreateCodexSession}
         onClose={() => setShowSessionMenu(false)}
+      />
+
+      <SettingsPanel
+        open={showSettings}
+        autoSend={autoSend}
+        onToggleAutoSend={toggleAutoSend}
+        onRestartSession={restartSession}
+        onClose={() => setShowSettings(false)}
       />
     </div>
   );
