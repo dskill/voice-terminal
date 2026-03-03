@@ -63,6 +63,7 @@ export default function App() {
   const [tmuxUnreadCompletions, setTmuxUnreadCompletions] = useState({});
   const [doneFlashVisible, setDoneFlashVisible] = useState(false);
   const completionSeenRef = useRef({});
+  const tmuxStatusBaselineReadyRef = useRef(false);
   const doneFlashTimerRef = useRef(null);
 
   const ws = useWebSocket();
@@ -154,6 +155,18 @@ export default function App() {
       }
 
       setTmuxStatusBySession(nextStatus);
+
+      if (!tmuxStatusBaselineReadyRef.current) {
+        const seededSeen = {};
+        for (const [sessionName, status] of Object.entries(nextStatus)) {
+          seededSeen[sessionName] = status.completionCount;
+        }
+        completionSeenRef.current = seededSeen;
+        tmuxStatusBaselineReadyRef.current = true;
+        setTmuxUnreadCompletions({});
+        return;
+      }
+
       setTmuxUnreadCompletions((prev) => {
         const nextUnread = { ...prev };
         for (const [sessionName, status] of Object.entries(nextStatus)) {
