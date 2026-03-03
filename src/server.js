@@ -60,6 +60,8 @@ function execFileAsync(command, args) {
   });
 }
 
+const HIDDEN_SESSIONS = new Set(['voice-terminal', 'claude-code-sdk']);
+
 async function listTmuxSessions() {
   const output = await execFileAsync('tmux', ['list-sessions']);
   if (!output) return [];
@@ -72,7 +74,8 @@ async function listTmuxSessions() {
       const colon = line.indexOf(':');
       const name = colon > 0 ? line.slice(0, colon) : line;
       return { name, label: line };
-    });
+    })
+    .filter((s) => !HIDDEN_SESSIONS.has(s.name));
 }
 
 function buildSessionName(kind) {
@@ -579,7 +582,6 @@ async function readTmuxAgentStatus() {
     ]);
     const parsed = JSON.parse(raw || '{}');
     const sessions = Array.isArray(parsed?.sessions) ? parsed.sessions : [];
-    const HIDDEN_SESSIONS = new Set(['voice-terminal', 'claude-code-sdk']);
     return sessions.filter((s) => !HIDDEN_SESSIONS.has(s.session)).map((session) => ({
       session: session.session,
       state: session.state === 'working' ? 'working' : 'idle',
