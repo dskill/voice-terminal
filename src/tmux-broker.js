@@ -117,8 +117,8 @@ async function runTmux(args, options = {}) {
 
 async function resolvePane(sessionName, paneTarget) {
   const session = requireString(sessionName, 'session');
-  await runTmux(['has-session', '-t', session]);
-  const target = (paneTarget && String(paneTarget).trim()) || session;
+  await runTmux(['has-session', '-t', `=${session}`]);
+  const target = (paneTarget && String(paneTarget).trim()) || `=${session}:`;
   const paneId = (await runTmux(['display-message', '-p', '-t', target, '#{pane_id}'])).trim();
   if (!paneId) {
     throw new Error(`unable to resolve pane for target: ${target}`);
@@ -129,8 +129,8 @@ async function resolvePane(sessionName, paneTarget) {
 
 async function listSessionPanes(sessionName) {
   const session = requireString(sessionName, 'session');
-  await runTmux(['has-session', '-t', session]);
-  const output = await runTmux(['list-panes', '-t', session, '-F', '#{pane_id}']);
+  await runTmux(['has-session', '-t', `=${session}`]);
+  const output = await runTmux(['list-panes', '-t', `=${session}:`, '-F', '#{pane_id}']);
   return output.split('\n').map((line) => line.trim()).filter(Boolean);
 }
 
