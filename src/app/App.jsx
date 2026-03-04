@@ -684,7 +684,6 @@ export default function App() {
           isConnected={ws.isConnected}
           sessionRunning={ws.sessionRunning}
           orchestratorLabel={formatOrchestratorLabel(ws.orchestrator || selectedOrchestrator)}
-          onRefresh={() => location.reload()}
         />
       </div>
 
@@ -794,6 +793,7 @@ export default function App() {
         orchestrator={selectedOrchestrator}
         orchestratorOptions={ORCHESTRATOR_OPTIONS.filter((o) => (ws.supportedOrchestrators || []).includes(o.value))}
         onSelectOrchestrator={handleSelectOrchestrator}
+        onRefresh={() => location.reload()}
         onRestartSession={restartSession}
         onClose={() => setShowSettings(false)}
       />

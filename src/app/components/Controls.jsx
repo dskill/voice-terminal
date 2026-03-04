@@ -17,8 +17,7 @@ function StatusBadge({ label, connected }) {
 export default function Controls({
   isConnected,
   sessionRunning,
-  orchestratorLabel,
-  onRefresh,
+  orchestratorLabel
 }) {
   return (
     <div className="flex items-center justify-center gap-2 flex-wrap px-3 py-3">
@@ -27,13 +26,6 @@ export default function Controls({
         label={`${orchestratorLabel}: ${sessionRunning ? 'On' : 'Off'}`}
         connected={sessionRunning}
       />
-
-      <button
-        onClick={onRefresh}
-        className="px-2 py-0.5 rounded text-[0.65rem] bg-slate-800/70 text-slate-300 border border-slate-700/50 hover:bg-slate-700 hover:text-white hover:border-slate-500 transition-colors"
-      >
-        Refresh
-      </button>
     </div>
   );
 }

@@ -9,6 +9,7 @@ export default function SettingsPanel({
   orchestrator,
   orchestratorOptions,
   onSelectOrchestrator,
+  onRefresh,
   onRestartSession,
   onClose
 }) {
@@ -69,12 +70,21 @@ export default function SettingsPanel({
               />
             </label>
 
-            <button
-              onClick={onRestartSession}
-              className="w-full px-3 py-2 rounded-lg text-sm font-medium border bg-cyan-700/70 border-cyan-500/40 text-cyan-50 hover:bg-cyan-600/80 transition-colors"
-            >
-              Restart Session
-            </button>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <button
+                onClick={onRefresh}
+                className="w-full px-3 py-2 rounded-lg text-sm font-medium border bg-slate-700/70 border-slate-500/50 text-slate-100 hover:bg-slate-600/80 transition-colors"
+              >
+                Refresh App
+              </button>
+
+              <button
+                onClick={onRestartSession}
+                className="w-full px-3 py-2 rounded-lg text-sm font-medium border bg-cyan-700/70 border-cyan-500/40 text-cyan-50 hover:bg-cyan-600/80 transition-colors"
+              >
+                Restart Session
+              </button>
+            </div>
           </div>
         </div>
       </div>
