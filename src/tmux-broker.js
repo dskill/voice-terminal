@@ -12,7 +12,6 @@ const LOG_DIR = join(BASE_DIR, 'logs');
 const STATE_DIR = join(BASE_DIR, 'states');
 const LOCK_DIR = join(BASE_DIR, 'locks');
 const QUIET_MS_DEFAULT = 5000;
-const POST_PASTE_ENTER_DELAY_MS = 220;
 const SUBMIT_KEY = 'Enter';
 const MAX_BUFFER = 10 * 1024 * 1024;
 const TIMEOUT_MS = 15000;
@@ -251,11 +250,6 @@ async function withPaneLock(key, fn, timeoutMs = 10000) {
   }
 }
 
-async function sleep(ms) {
-  if (!ms || ms <= 0) return;
-  await new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 async function ensurePaneState(sessionName, paneTarget) {
   await ensureDirs();
   const resolved = await resolvePane(sessionName, paneTarget);
@@ -333,25 +327,27 @@ async function cmdSendInput(opts) {
   const pressEnter = !opts['no-enter'];
   const payload = opts.text;
   const payloadBytes = Buffer.byteLength(payload);
-  const enterDelayMs = pressEnter ? POST_PASTE_ENTER_DELAY_MS : 0;
 
   const result = await withPaneLock(key, async () => {
     const bufferName = `voice_terminal_${randomUUID().replace(/-/g, '')}`;
     await runTmux(['load-buffer', '-b', bufferName, '-'], { input: payload });
-    await runTmux(['paste-buffer', '-d', '-b', bufferName, '-t', resolved.target]);
     if (pressEnter) {
-      // Large pastes can race with submit; wait briefly, then use Enter.
-      // In tmux 3.4 + Codex panes, lowercase C-m is not reliable as an Enter alias.
-      await sleep(enterDelayMs);
-      await runTmux(['send-keys', '-t', resolved.target, SUBMIT_KEY]);
+      // Keep submit separate from pasted content so line editors treat Enter as a real keypress.
+      // Use -p so bracketed paste-aware apps (like Codex panes) can safely handle large payloads.
+      await runTmux([
+        'paste-buffer', '-d', '-r', '-p', '-b', bufferName, '-t', resolved.target,
+        ';',
+        'send-keys', '-t', resolved.target, SUBMIT_KEY
+      ]);
+    } else {
+      await runTmux(['paste-buffer', '-d', '-r', '-p', '-b', bufferName, '-t', resolved.target]);
     }
     return {
       ok: true,
       session: resolved.session,
       paneId: resolved.paneId,
       bytes: payloadBytes,
-      pressEnter,
-      enterDelayMs
+      pressEnter
     };
   });
 
