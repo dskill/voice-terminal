@@ -571,10 +571,17 @@ export default function App() {
   const handleReviewTmuxSession = useCallback((sessionName) => {
     const next = String(sessionName || '').trim();
     if (!next) return;
+    setActiveTmuxSession(next);
+    localStorage.setItem('voice-terminal-active-tmux', next);
+    const status = tmuxStatusBySession[next];
+    if (status) {
+      completionSeenRef.current[next] = status.completionCount;
+    }
+    setTmuxUnreadCompletions((prev) => ({ ...prev, [next]: 0 }));
     ws.summarizeTmuxSession(next);
-    setLiveText(`Reviewing tmux session ${next}...`);
+    setLiveText(`Attached and reviewing tmux session ${next}...`);
     setShowSessionMenu(false);
-  }, [ws]);
+  }, [ws, tmuxStatusBySession]);
 
   const handleCreateClaudeSession = useCallback(() => {
     ws.createTmuxSession('claude');
