@@ -69,3 +69,22 @@ Access at `https://your-vm.exe.xyz:3456/`
   - `STT_MODEL` (example: `base.en`, `tiny.en`)
   - `STT_COMPUTE_TYPE` (default: `int8`)
   - `STT_CPU_THREADS` (default: `4`)
+
+## Troubleshooting
+
+If you see:
+
+`ModuleNotFoundError: No module named 'faster_whisper'`
+
+the server was started without the project venv on `PATH`.
+
+Fix:
+
+```bash
+cd /path/to/voice-terminal
+python3 -m venv .venv
+.venv/bin/pip install -r requirements-stt.txt
+PATH="/path/to/voice-terminal/.venv/bin:$PATH" npm run server
+```
+
+If the server is already running, restart it after installing the package.
