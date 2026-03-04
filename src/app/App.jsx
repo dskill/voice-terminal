@@ -44,10 +44,12 @@ function buildStreamingFromTimeline(timeline, fallbackText = '', fallbackToolCal
 export default function App() {
   const ORCHESTRATOR_OPTIONS = [
     { value: 'claude', label: 'Claude' },
+    { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
     { value: 'codex', label: 'Codex (Spark)' },
   ];
   const formatOrchestratorLabel = (kind) => {
     if (kind === 'codex') return 'Codex (Spark)';
+    if (kind === 'claude-sonnet-4-6') return 'Claude Sonnet 4.6';
     return 'Claude';
   };
 
@@ -76,7 +78,9 @@ export default function App() {
   const [doneFlashVisible, setDoneFlashVisible] = useState(false);
   const [selectedOrchestrator, setSelectedOrchestrator] = useState(() => {
     const stored = localStorage.getItem('voice-terminal-orchestrator');
-    return stored === 'codex' ? 'codex' : 'claude';
+    if (stored === 'codex') return 'codex';
+    if (stored === 'claude-sonnet-4-6') return 'claude-sonnet-4-6';
+    return 'claude';
   });
   const completionSeenRef = useRef({});
   const tmuxStatusBaselineReadyRef = useRef(false);
@@ -529,7 +533,9 @@ export default function App() {
   }, [ws, selectedOrchestrator]);
 
   const handleSelectOrchestrator = useCallback((next) => {
-    const normalized = next === 'codex' ? 'codex' : 'claude';
+    const normalized = next === 'codex'
+      ? 'codex'
+      : (next === 'claude-sonnet-4-6' ? 'claude-sonnet-4-6' : 'claude');
     setSelectedOrchestrator(normalized);
     localStorage.setItem('voice-terminal-orchestrator', normalized);
     setMessages([]);
@@ -629,7 +635,9 @@ export default function App() {
 
   useEffect(() => {
     if (!ws.isConnected) return;
-    const desired = selectedOrchestrator === 'codex' ? 'codex' : 'claude';
+    const desired = selectedOrchestrator === 'codex'
+      ? 'codex'
+      : (selectedOrchestrator === 'claude-sonnet-4-6' ? 'claude-sonnet-4-6' : 'claude');
     if (ws.orchestrator && ws.orchestrator !== desired) {
       ws.setSessionOrchestrator(desired);
     }

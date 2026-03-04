@@ -4,7 +4,7 @@ export default function useWebSocket() {
   const [isConnected, setIsConnected] = useState(false);
   const [sessionRunning, setSessionRunning] = useState(false);
   const [orchestrator, setOrchestrator] = useState('claude');
-  const [supportedOrchestrators, setSupportedOrchestrators] = useState(['claude', 'codex']);
+  const [supportedOrchestrators, setSupportedOrchestrators] = useState(['claude', 'claude-sonnet-4-6', 'codex']);
   const wsRef = useRef(null);
   const handlersRef = useRef({});
   const reconnectTimer = useRef(null);

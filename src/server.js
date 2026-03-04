@@ -21,6 +21,11 @@ const ORCHESTRATOR_CONFIG = {
     label: 'Claude',
     defaultModel: 'claude-code'
   },
+  'claude-sonnet-4-6': {
+    kind: 'claude-sonnet-4-6',
+    label: 'Claude Sonnet 4.6',
+    defaultModel: 'claude-sonnet-4-6'
+  },
   codex: {
     kind: 'codex',
     label: 'Codex (Spark)',
@@ -31,7 +36,9 @@ const ORCHESTRATOR_CONFIG = {
 const SUPPORTED_ORCHESTRATORS = Object.keys(ORCHESTRATOR_CONFIG);
 
 function normalizeOrchestratorKind(kind) {
-  return kind === 'codex' ? 'codex' : 'claude';
+  if (kind === 'codex') return 'codex';
+  if (kind === 'claude-sonnet-4-6') return 'claude-sonnet-4-6';
+  return 'claude';
 }
 
 function orchestratorLabel(kind) {
@@ -395,7 +402,7 @@ function handleOrchestratorEvent(event) {
   }
 }
 
-function createClaudeAdapter(emit) {
+function createClaudeAdapter(emit, modelName) {
   let claudeProcess = null;
   let ready = false;
 
@@ -413,6 +420,9 @@ function createClaudeAdapter(emit) {
       '--append-system-prompt-file', systemPromptPath,
       '--dangerously-skip-permissions'
     ];
+    if (modelName && modelName !== 'claude-code') {
+      args.push('--model', modelName);
+    }
 
     const projectBinDir = join(__dirname, '..');
 
@@ -771,7 +781,7 @@ function createOrchestrator(kind, emit) {
   if (normalized === 'codex') {
     return createCodexAdapter(emit);
   }
-  return createClaudeAdapter(emit);
+  return createClaudeAdapter(emit, ORCHESTRATOR_CONFIG[normalized].defaultModel);
 }
 
 function setActiveOrchestrator(kind) {
