@@ -20,10 +20,10 @@ function formatCost(cost) {
 }
 
 const typeStyles = {
-  user: 'bg-slate-900/70 border-l-cyan-500',
-  assistant: 'bg-slate-900/55 border-l-teal-400',
-  error: 'bg-rose-950/25 border-l-rose-400',
-  status: 'bg-slate-900/65 border-l-indigo-400 italic',
+  user: 'bg-slate-900/70 border-l-slate-600',
+  assistant: 'bg-slate-900/55 border-l-cyan-900',
+  error: 'bg-rose-950/20 border-l-rose-900',
+  status: 'bg-slate-900/65 border-l-slate-700 italic',
 };
 
 const typeLabels = {
@@ -75,7 +75,7 @@ export default function Message({ type, content, spokenSummary, metadata, toolCa
   const timelineContent = renderTimeline(timeline, isStreaming);
 
   return (
-    <div className={`rounded-lg border-l-[3px] p-3 mb-3 ${style} ${isStreaming ? 'border-l-cyan-400' : ''}`}>
+    <div className={`rounded-lg border-l-[3px] p-3 mb-3 ${style} ${isStreaming ? 'border-l-cyan-800' : ''}`}>
       <div className="text-[0.65rem] uppercase tracking-wider text-slate-500 mb-1">{label}</div>
 
       {!timelineContent && toolCalls && toolCalls.length > 0 && (
