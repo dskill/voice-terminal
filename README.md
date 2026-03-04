@@ -84,7 +84,8 @@ Fix:
 cd /path/to/voice-terminal
 python3 -m venv .venv
 .venv/bin/pip install -r requirements-stt.txt
+npm run build
 PATH="/path/to/voice-terminal/.venv/bin:$PATH" npm run server
 ```
 
-If the server is already running, restart it after installing the package.
+If the server is already running, restart it after installing the package and rebuilding.
