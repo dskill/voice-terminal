@@ -15,6 +15,29 @@ const __dirname = dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3456;
 
+const ORCHESTRATOR_CONFIG = {
+  claude: {
+    kind: 'claude',
+    label: 'Claude',
+    defaultModel: 'claude-code'
+  },
+  codex: {
+    kind: 'codex',
+    label: 'Codex (Spark)',
+    defaultModel: 'gpt-5.3-codex-spark'
+  }
+};
+
+const SUPPORTED_ORCHESTRATORS = Object.keys(ORCHESTRATOR_CONFIG);
+
+function normalizeOrchestratorKind(kind) {
+  return kind === 'codex' ? 'codex' : 'claude';
+}
+
+function orchestratorLabel(kind) {
+  return ORCHESTRATOR_CONFIG[normalizeOrchestratorKind(kind)].label;
+}
+
 // Serve static files
 const distPath = join(__dirname, '../dist');
 const publicPath = join(__dirname, '../public');
@@ -27,18 +50,19 @@ const server = createServer(app);
 const wss = new WebSocketServer({ server });
 
 // ============================================
-// Persistent Claude Session
+// Orchestrator Session State
 // ============================================
 
-let claudeProcess = null;
-let claudeReady = false;
+let activeOrchestratorKind = normalizeOrchestratorKind(process.env.ORCHESTRATOR || 'claude');
+let orchestrator = null;
+let sessionReady = false;
 let sessionInitialized = false;
 let responseBuffer = '';
 let connectedClients = new Set();
-let conversationHistory = []; // Store conversation for reconnecting clients
-let sessionMetadata = {}; // Store session info from init message
-let currentTurnEvents = []; // Collect all events for current turn
-let cancelledTurn = false; // Soft-cancel: ignore remaining output for this turn
+let conversationHistory = [];
+let sessionMetadata = {};
+let currentTurnEvents = [];
+let cancelledTurn = false;
 let currentTurnToolCalls = [];
 let currentTurnTimeline = [];
 let currentTurnSeq = 0;
@@ -135,6 +159,794 @@ async function createTmuxSession(kind) {
     : 'claude --dangerously-skip-permissions';
   await execFileAsync('tmux', ['new-session', '-d', '-s', sessionName, '-c', process.env.HOME, command]);
   return { name: sessionName, kind: safeKind, command };
+}
+
+function appendTurnTimeline(event) {
+  const last = currentTurnTimeline[currentTurnTimeline.length - 1];
+  if (event.type === 'text' && last?.type === 'text') {
+    last.text = `${last.text || ''}${event.text || ''}`;
+    last.seq = event.seq ?? last.seq;
+    return;
+  }
+  currentTurnTimeline.push(event);
+}
+
+function extractSpokenSummary(response) {
+  const matches = [...response.matchAll(/\[SPOKEN:\s*([\s\S]*?)\]/gi)];
+  if (matches.length > 0) {
+    return matches[matches.length - 1][1].trim();
+  }
+  const paragraphs = response.trim().split('\n\n');
+  return paragraphs[paragraphs.length - 1].slice(0, 500);
+}
+
+function broadcastToClients(message) {
+  const json = JSON.stringify(message);
+  for (const client of connectedClients) {
+    if (client.readyState === 1) {
+      client.send(json);
+    }
+  }
+}
+
+function broadcastSessionStatus(targetClient = null) {
+  const payload = {
+    type: 'session-status',
+    running: sessionReady,
+    hasProcess: !!orchestrator,
+    orchestrator: activeOrchestratorKind,
+    supportedOrchestrators: SUPPORTED_ORCHESTRATORS
+  };
+
+  if (targetClient) {
+    if (targetClient.readyState === 1) targetClient.send(JSON.stringify(payload));
+    return;
+  }
+  broadcastToClients(payload);
+}
+
+function resetTurnTracking() {
+  responseBuffer = '';
+  currentTurnToolCalls = [];
+  currentTurnTimeline = [];
+  currentTurnSeq = 0;
+  inFlightTurn = null;
+  cancelledTurn = false;
+}
+
+function resetConversationState() {
+  conversationHistory = [];
+  currentTurnToolCalls = [];
+  currentTurnTimeline = [];
+  currentTurnSeq = 0;
+  inFlightTurn = null;
+  nextMessageId = 1;
+  responseBuffer = '';
+  cancelledTurn = false;
+}
+
+function handleOrchestratorEvent(event) {
+  if (!event || typeof event !== 'object') return;
+  const type = event.type;
+
+  currentTurnEvents.push(event);
+
+  if (type === 'session-init') {
+    sessionMetadata = {
+      ...sessionMetadata,
+      model: event.model || sessionMetadata.model,
+      tools: event.tools || sessionMetadata.tools,
+      sessionId: event.sessionId || sessionMetadata.sessionId,
+      version: event.version || sessionMetadata.version,
+      orchestrator: activeOrchestratorKind
+    };
+    sessionReady = true;
+
+    if (!sessionInitialized) {
+      sessionInitialized = true;
+      broadcastToClients({
+        type: 'session-init',
+        model: sessionMetadata.model,
+        version: sessionMetadata.version,
+        orchestrator: activeOrchestratorKind
+      });
+    } else {
+      broadcastToClients({
+        type: 'session-reinit',
+        model: sessionMetadata.model,
+        version: sessionMetadata.version,
+        orchestrator: activeOrchestratorKind
+      });
+    }
+    broadcastSessionStatus();
+    return;
+  }
+
+  if (type === 'partial') {
+    if (cancelledTurn) return;
+    const text = String(event.text || '');
+    if (!text) return;
+
+    responseBuffer += text;
+    const timelineEvent = {
+      type: 'text',
+      seq: ++currentTurnSeq,
+      text
+    };
+    appendTurnTimeline(timelineEvent);
+
+    if (inFlightTurn) {
+      inFlightTurn.partialText += text;
+      const timelineLast = inFlightTurn.timeline[inFlightTurn.timeline.length - 1];
+      if (timelineLast?.type === 'text') {
+        timelineLast.text = `${timelineLast.text || ''}${text}`;
+        timelineLast.seq = timelineEvent.seq;
+      } else {
+        inFlightTurn.timeline.push({ ...timelineEvent });
+      }
+    }
+
+    broadcastToClients({ type: 'partial', seq: timelineEvent.seq, text });
+    return;
+  }
+
+  if (type === 'tool-call') {
+    if (cancelledTurn) return;
+    const timelineEvent = {
+      type: 'tool',
+      seq: ++currentTurnSeq,
+      toolName: event.toolName,
+      input: event.input
+    };
+    currentTurnToolCalls.push({ toolName: event.toolName, input: event.input });
+    appendTurnTimeline(timelineEvent);
+
+    if (inFlightTurn) {
+      inFlightTurn.toolCalls.push({ toolName: event.toolName, input: event.input });
+      inFlightTurn.timeline.push(timelineEvent);
+    }
+
+    broadcastToClients({
+      type: 'tool-call',
+      seq: timelineEvent.seq,
+      toolName: event.toolName,
+      toolId: event.toolId,
+      input: event.input
+    });
+    return;
+  }
+
+  if (type === 'response') {
+    const wasCancelled = cancelledTurn;
+    cancelledTurn = false;
+    currentTurnEvents = [];
+
+    if (wasCancelled) {
+      responseBuffer = '';
+      currentTurnToolCalls = [];
+      currentTurnTimeline = [];
+      currentTurnSeq = 0;
+      inFlightTurn = null;
+      return;
+    }
+
+    const fullResponse = typeof event.fullResponse === 'string' ? event.fullResponse : responseBuffer;
+    responseBuffer = '';
+    const spokenSummary = extractSpokenSummary(fullResponse);
+
+    const metadata = {
+      ...(event.metadata || {}),
+      model: sessionMetadata.model || event.model,
+      orchestrator: activeOrchestratorKind
+    };
+
+    const assistantMessage = {
+      id: nextMessageId++,
+      type: 'assistant',
+      content: fullResponse,
+      spokenSummary,
+      toolCalls: currentTurnToolCalls,
+      timeline: currentTurnTimeline,
+      spokenDelivered: !spokenSummary,
+      metadata,
+      timestamp: Date.now()
+    };
+    conversationHistory.push(assistantMessage);
+    currentTurnToolCalls = [];
+    currentTurnTimeline = [];
+    currentTurnSeq = 0;
+    inFlightTurn = null;
+
+    broadcastToClients({
+      type: 'response',
+      fullResponse,
+      spokenSummary,
+      toolCalls: assistantMessage.toolCalls,
+      timeline: assistantMessage.timeline,
+      model: sessionMetadata.model,
+      orchestrator: activeOrchestratorKind,
+      metadata
+    });
+
+    if (spokenSummary && isTTSReady() && getTTSEnabledClients().length > 0) {
+      synthesizeAndBroadcastAudio(spokenSummary, assistantMessage.id);
+    }
+    return;
+  }
+
+  if (type === 'error') {
+    broadcastToClients({
+      type: 'error',
+      message: event.message || 'Unknown error',
+      orchestrator: activeOrchestratorKind
+    });
+    return;
+  }
+
+  if (type === 'session-ended') {
+    sessionReady = false;
+    sessionInitialized = false;
+    broadcastToClients({
+      type: 'session-ended',
+      code: event.code,
+      orchestrator: activeOrchestratorKind
+    });
+    broadcastSessionStatus();
+  }
+}
+
+function createClaudeAdapter(emit) {
+  let claudeProcess = null;
+  let ready = false;
+
+  function start() {
+    if (claudeProcess) {
+      return;
+    }
+
+    const args = [
+      '--print',
+      '--output-format', 'stream-json',
+      '--input-format', 'stream-json',
+      '--include-partial-messages',
+      '--verbose',
+      '--append-system-prompt-file', systemPromptPath,
+      '--dangerously-skip-permissions'
+    ];
+
+    const projectBinDir = join(__dirname, '..');
+
+    const processRef = spawn('claude', args, {
+      cwd: process.env.HOME,
+      env: {
+        ...process.env,
+        PATH: `${projectBinDir}:${process.env.PATH || ''}`
+      },
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+    claudeProcess = processRef;
+
+    const rl = createInterface({ input: processRef.stdout });
+    rl.on('line', (line) => {
+      if (!line.trim()) return;
+      let msg;
+      try {
+        msg = JSON.parse(line);
+      } catch {
+        return;
+      }
+
+      if (msg.type === 'system' && msg.subtype === 'init') {
+        emit({
+          type: 'session-init',
+          model: msg.model,
+          tools: msg.tools,
+          sessionId: msg.session_id,
+          version: msg.claude_code_version
+        });
+        return;
+      }
+
+      if (msg.type === 'assistant') {
+        const content = msg?.message?.content;
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            if (block?.type === 'tool_use') {
+              emit({
+                type: 'tool-call',
+                toolName: block.name,
+                toolId: block.id,
+                input: block.input
+              });
+            }
+          }
+        }
+        return;
+      }
+
+      if (msg.type === 'stream_event') {
+        const event = msg?.event;
+        if (event?.type === 'content_block_delta' && event?.delta?.type === 'text_delta') {
+          emit({ type: 'partial', text: event.delta.text || '' });
+        }
+        return;
+      }
+
+      if (msg.type === 'result') {
+        emit({
+          type: 'response',
+          metadata: {
+            durationMs: msg.duration_ms,
+            durationApiMs: msg.duration_api_ms,
+            numTurns: msg.num_turns,
+            totalCostUsd: msg.total_cost_usd,
+            usage: msg.usage,
+            modelUsage: msg.modelUsage,
+            isError: msg.is_error
+          }
+        });
+        return;
+      }
+
+      if (msg.type === 'error') {
+        emit({ type: 'error', message: msg.error?.message || msg.message || 'Unknown Claude error' });
+      }
+    });
+
+    processRef.stderr.on('data', (data) => {
+      console.log('Claude stderr:', data.toString());
+    });
+
+    processRef.on('close', (code) => {
+      if (claudeProcess !== processRef) return;
+      claudeProcess = null;
+      ready = false;
+      emit({ type: 'session-ended', code });
+    });
+
+    processRef.on('error', (err) => {
+      if (claudeProcess !== processRef) return;
+      claudeProcess = null;
+      ready = false;
+      emit({ type: 'error', message: `Claude process error: ${err.message}` });
+    });
+
+    try {
+      const initMessage = {
+        type: 'control_request',
+        request_id: `init-${Date.now()}`,
+        request: { subtype: 'initialize' }
+      };
+      processRef.stdin.write(`${JSON.stringify(initMessage)}\n`);
+    } catch (err) {
+      emit({ type: 'error', message: `Failed to initialize Claude stream: ${err.message}` });
+    }
+
+    ready = true;
+  }
+
+  function stop() {
+    if (!claudeProcess) {
+      ready = false;
+      return;
+    }
+    claudeProcess.kill('SIGTERM');
+    claudeProcess = null;
+    ready = false;
+  }
+
+  function sendUserMessage(userMessage) {
+    if (!claudeProcess || !ready) {
+      return { error: 'Claude session not running' };
+    }
+
+    const message = {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: userMessage
+      }
+    };
+
+    try {
+      claudeProcess.stdin.write(`${JSON.stringify(message)}\n`);
+    } catch (err) {
+      return { error: `Failed to send message to Claude: ${err.message}` };
+    }
+
+    return { success: true };
+  }
+
+  function cancel() {
+    return { terminated: false };
+  }
+
+  function isReady() {
+    return !!claudeProcess && ready;
+  }
+
+  return {
+    kind: 'claude',
+    start,
+    stop,
+    sendUserMessage,
+    cancel,
+    isReady
+  };
+}
+
+function createCodexAdapter(emit) {
+  let ready = false;
+  let activeProcess = null;
+  let lastStartedThreadId = null;
+  let hasSessionHistory = false;
+
+  function parseCodexItem(item) {
+    if (!item || typeof item !== 'object') return;
+    const type = item.type;
+
+    if (type === 'agent_message' || type === 'agentMessage') {
+      const text = typeof item.text === 'string' ? item.text : '';
+      if (text) emit({ type: 'partial', text });
+      return;
+    }
+
+    if (type === 'command_execution' || type === 'commandExecution') {
+      emit({
+        type: 'tool-call',
+        toolName: 'exec_command',
+        toolId: item.id,
+        input: {
+          command: item.command,
+          cwd: item.cwd,
+          status: item.status
+        }
+      });
+      return;
+    }
+
+    if (type === 'file_change' || type === 'fileChange') {
+      emit({
+        type: 'tool-call',
+        toolName: 'apply_patch',
+        toolId: item.id,
+        input: {
+          status: item.status,
+          changes: item.changes
+        }
+      });
+    }
+  }
+
+  function start() {
+    if (ready) return;
+    lastStartedThreadId = null;
+    hasSessionHistory = false;
+    ready = true;
+    emit({
+      type: 'session-init',
+      model: ORCHESTRATOR_CONFIG.codex.defaultModel,
+      version: 'codex-exec-json'
+    });
+  }
+
+  function stop() {
+    ready = false;
+    lastStartedThreadId = null;
+    hasSessionHistory = false;
+    if (activeProcess) {
+      activeProcess.kill('SIGTERM');
+      activeProcess = null;
+    }
+  }
+
+  function sendUserMessage(userMessage) {
+    if (!ready) {
+      return { error: 'Codex session not running' };
+    }
+    if (activeProcess) {
+      return { error: 'Codex is still processing the previous request' };
+    }
+
+    const args = [
+      '--dangerously-bypass-approvals-and-sandbox',
+      '--config', `model_instructions_file="${systemPromptPath}"`,
+      'exec'
+    ];
+
+    if (hasSessionHistory) {
+      args.push('resume', '--last');
+    }
+
+    args.push(
+      '--json',
+      '--skip-git-repo-check',
+      '--model', ORCHESTRATOR_CONFIG.codex.defaultModel,
+      userMessage
+    );
+
+    const processRef = spawn('codex', args, {
+      cwd: process.cwd(),
+      env: { ...process.env },
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    activeProcess = processRef;
+
+    const rl = createInterface({ input: processRef.stdout });
+    rl.on('line', (line) => {
+      if (!line.trim()) return;
+      let msg;
+      try {
+        msg = JSON.parse(line);
+      } catch {
+        return;
+      }
+
+      if (msg.type === 'thread.started') {
+        lastStartedThreadId = msg.thread_id;
+        hasSessionHistory = true;
+        if (!sessionInitialized) {
+          emit({
+            type: 'session-init',
+            model: ORCHESTRATOR_CONFIG.codex.defaultModel,
+            sessionId: msg.thread_id,
+            version: 'codex-exec-json'
+          });
+        }
+        return;
+      }
+
+      if (msg.type === 'item.completed') {
+        parseCodexItem(msg.item);
+        return;
+      }
+
+      if (msg.type === 'item.started') {
+        parseCodexItem(msg.item);
+        return;
+      }
+
+      if (msg.type === 'error') {
+        emit({ type: 'error', message: msg.message || msg.error?.message || 'Codex execution error' });
+      }
+
+      if (msg.type === 'turn.completed') {
+        emit({
+          type: 'response',
+          metadata: {
+            usage: msg.usage || null,
+            threadId: lastStartedThreadId,
+            model: ORCHESTRATOR_CONFIG.codex.defaultModel
+          }
+        });
+      }
+    });
+
+    processRef.stderr.on('data', (data) => {
+      const text = data.toString().trim();
+      if (!text) return;
+      console.log('Codex stderr:', text);
+    });
+
+    processRef.on('error', (err) => {
+      if (activeProcess !== processRef) return;
+      activeProcess = null;
+      emit({ type: 'error', message: `Codex process error: ${err.message}` });
+    });
+
+    processRef.on('close', (code) => {
+      if (activeProcess !== processRef) return;
+      activeProcess = null;
+      if (code !== 0) {
+        emit({ type: 'error', message: `Codex exited with code ${code}` });
+      }
+    });
+
+    return { success: true };
+  }
+
+  function cancel() {
+    if (!activeProcess) return { terminated: false };
+    activeProcess.kill('SIGTERM');
+    activeProcess = null;
+    return { terminated: true };
+  }
+
+  function isReady() {
+    return ready;
+  }
+
+  return {
+    kind: 'codex',
+    start,
+    stop,
+    sendUserMessage,
+    cancel,
+    isReady
+  };
+}
+
+function createOrchestrator(kind, emit) {
+  const normalized = normalizeOrchestratorKind(kind);
+  if (normalized === 'codex') {
+    return createCodexAdapter(emit);
+  }
+  return createClaudeAdapter(emit);
+}
+
+function setActiveOrchestrator(kind) {
+  const next = normalizeOrchestratorKind(kind);
+  activeOrchestratorKind = next;
+  orchestrator = createOrchestrator(next, handleOrchestratorEvent);
+  sessionReady = false;
+  sessionInitialized = false;
+  sessionMetadata = { orchestrator: next, model: ORCHESTRATOR_CONFIG[next].defaultModel };
+}
+
+function startSession() {
+  if (!orchestrator) {
+    setActiveOrchestrator(activeOrchestratorKind);
+  }
+  if (orchestrator?.isReady()) {
+    sessionReady = true;
+    return;
+  }
+
+  resetConversationState();
+  orchestrator.start();
+  sessionReady = orchestrator.isReady();
+}
+
+function stopSession() {
+  if (orchestrator) {
+    orchestrator.stop();
+  }
+  sessionReady = false;
+  sessionInitialized = false;
+  resetConversationState();
+}
+
+function restartSession() {
+  stopSession();
+  startSession();
+}
+
+function switchOrchestrator(kind) {
+  const next = normalizeOrchestratorKind(kind);
+  if (next === activeOrchestratorKind && orchestrator?.isReady()) {
+    return { success: true, orchestrator: activeOrchestratorKind };
+  }
+
+  if (orchestrator) {
+    orchestrator.stop();
+  }
+  resetConversationState();
+  setActiveOrchestrator(next);
+  orchestrator.start();
+  sessionReady = orchestrator.isReady();
+
+  broadcastToClients({
+    type: 'orchestrator-changed',
+    orchestrator: activeOrchestratorKind,
+    label: orchestratorLabel(activeOrchestratorKind)
+  });
+  broadcastSessionStatus();
+
+  return { success: true, orchestrator: activeOrchestratorKind };
+}
+
+function sendToOrchestrator(userMessage) {
+  if (!orchestrator || !orchestrator.isReady()) {
+    return { error: `${orchestratorLabel(activeOrchestratorKind)} session not running` };
+  }
+  if (inFlightTurn) {
+    return { error: `${orchestratorLabel(activeOrchestratorKind)} is still processing the previous request` };
+  }
+
+  cancelledTurn = false;
+  responseBuffer = '';
+  currentTurnToolCalls = [];
+  currentTurnTimeline = [];
+  currentTurnSeq = 0;
+  inFlightTurn = {
+    userMessage,
+    startedAt: Date.now(),
+    partialText: '',
+    toolCalls: [],
+    timeline: []
+  };
+
+  const result = orchestrator.sendUserMessage(userMessage);
+  if (result?.error) {
+    inFlightTurn = null;
+    return result;
+  }
+  return { success: true };
+}
+
+function interruptSession() {
+  if (!orchestrator || !orchestrator.isReady()) {
+    return { success: false };
+  }
+
+  let cancelledSnapshot = null;
+  if (inFlightTurn && !inFlightTurn.cancelledSnapshotSaved) {
+    const snapshot = snapshotCurrentTurn();
+    if (hasVisibleTurnContent(snapshot)) {
+      const assistantMessage = {
+        id: nextMessageId++,
+        type: 'assistant',
+        content: snapshot.fullResponse,
+        spokenSummary: '',
+        toolCalls: snapshot.toolCalls,
+        timeline: snapshot.timeline,
+        spokenDelivered: true,
+        metadata: {
+          interrupted: true,
+          cancelled: true,
+          partial: true,
+          orchestrator: activeOrchestratorKind
+        },
+        timestamp: Date.now()
+      };
+      conversationHistory.push(assistantMessage);
+      cancelledSnapshot = {
+        fullResponse: assistantMessage.content,
+        toolCalls: assistantMessage.toolCalls,
+        timeline: assistantMessage.timeline
+      };
+      inFlightTurn.cancelledSnapshotSaved = true;
+      inFlightTurn.cancelled = true;
+    }
+  }
+
+  const cancelResult = orchestrator.cancel();
+  if (cancelResult?.terminated) {
+    resetTurnTracking();
+    return { success: true, cancelledSnapshot };
+  }
+
+  cancelledTurn = true;
+  responseBuffer = '';
+  currentTurnToolCalls = [];
+  currentTurnTimeline = [];
+  currentTurnSeq = 0;
+  if (inFlightTurn) inFlightTurn.cancelled = true;
+
+  return { success: true, cancelledSnapshot };
+}
+
+async function synthesizeAndBroadcastAudio(text, messageId = null, targetClient = null) {
+  try {
+    const ttsClients = getTTSEnabledClients(targetClient);
+    if (ttsClients.length === 0) {
+      return;
+    }
+
+    console.log(`[TTS] Synthesizing: "${text.slice(0, 80)}..."`);
+    const { audio, samplingRate } = await synthesize(text);
+    console.log(`[TTS] Done: ${audio.length} samples @ ${samplingRate}Hz`);
+
+    const meta = JSON.stringify({ type: 'tts-audio', samplingRate, numSamples: audio.length });
+    for (const client of ttsClients) {
+      client.send(meta);
+    }
+
+    const buffer = Buffer.from(audio.buffer);
+    for (const client of ttsClients) {
+      client.send(buffer);
+    }
+
+    if (messageId != null) {
+      const msg = conversationHistory.find((m) => m.id === messageId);
+      if (msg) {
+        msg.spokenDelivered = true;
+      }
+    }
+  } catch (err) {
+    console.error('[TTS] Synthesis error:', err);
+    broadcastToClients({ type: 'tts-error', message: err.message });
+  }
 }
 
 function startSTTWorker() {
@@ -274,440 +1086,6 @@ function transcribeAudioBuffer(audioBuffer, mimeType) {
   });
 }
 
-function startClaudeSession() {
-  if (claudeProcess) {
-    console.log('Claude session already running');
-    return;
-  }
-
-  // Clear history when starting new session
-  conversationHistory = [];
-  currentTurnToolCalls = [];
-  currentTurnTimeline = [];
-  currentTurnSeq = 0;
-  inFlightTurn = null;
-  nextMessageId = 1;
-  sessionInitialized = false;
-
-  console.log('Starting Claude session with stream-json mode...');
-
-  const args = [
-    '--print',
-    '--output-format', 'stream-json',
-    '--input-format', 'stream-json',
-    '--include-partial-messages',
-    '--verbose',
-    '--append-system-prompt-file', systemPromptPath,
-    '--dangerously-skip-permissions'
-  ];
-
-  const projectBinDir = join(__dirname, '..');
-
-  const processRef = spawn('claude', args, {
-    cwd: process.env.HOME,
-    env: {
-      ...process.env,
-      PATH: `${projectBinDir}:${process.env.PATH || ''}`
-    },
-    stdio: ['pipe', 'pipe', 'pipe']
-  });
-  claudeProcess = processRef;
-
-  // Read stdout line by line (each line is a JSON message)
-  const rl = createInterface({ input: processRef.stdout });
-
-  rl.on('line', (line) => {
-    if (!line.trim()) return;
-
-    try {
-      const msg = JSON.parse(line);
-      handleClaudeMessage(msg);
-    } catch (e) {
-      console.log('Non-JSON output:', line);
-    }
-  });
-
-  processRef.stderr.on('data', (data) => {
-    console.log('Claude stderr:', data.toString());
-  });
-
-  processRef.on('close', (code) => {
-    if (claudeProcess !== processRef) {
-      console.log(`Stale Claude process closed with code ${code}`);
-      return;
-    }
-    console.log(`Claude process exited with code ${code}`);
-    claudeProcess = null;
-    claudeReady = false;
-    sessionInitialized = false;
-    broadcastToClients({ type: 'session-ended', code });
-  });
-
-  processRef.on('error', (err) => {
-    if (claudeProcess !== processRef) {
-      console.log(`Stale Claude process error: ${err.message}`);
-      return;
-    }
-    console.error('Claude process error:', err);
-    claudeProcess = null;
-    claudeReady = false;
-  });
-
-  // Keep stream-json sessions alive by performing the control-protocol handshake
-  // immediately after startup. Newer Claude CLI versions may exit quickly without this.
-  try {
-    const initMessage = {
-      type: 'control_request',
-      request_id: `init-${Date.now()}`,
-      request: { subtype: 'initialize' }
-    };
-    processRef.stdin.write(`${JSON.stringify(initMessage)}\n`);
-  } catch (err) {
-    console.warn('Failed to send Claude initialize handshake:', err.message);
-  }
-
-  claudeReady = true;
-  console.log('Claude session started');
-}
-
-function interruptClaude() {
-  if (!claudeProcess) {
-    console.log('No Claude session to interrupt');
-    return { success: false };
-  }
-  console.log('Soft-cancelling current turn (session stays alive)...');
-
-  let cancelledSnapshot = null;
-  if (inFlightTurn && !inFlightTurn.cancelledSnapshotSaved) {
-    const snapshot = snapshotCurrentTurn();
-    if (hasVisibleTurnContent(snapshot)) {
-      const assistantMessage = {
-        id: nextMessageId++,
-        type: 'assistant',
-        content: snapshot.fullResponse,
-        spokenSummary: '',
-        toolCalls: snapshot.toolCalls,
-        timeline: snapshot.timeline,
-        spokenDelivered: true,
-        metadata: {
-          interrupted: true,
-          cancelled: true,
-          partial: true
-        },
-        timestamp: Date.now()
-      };
-      conversationHistory.push(assistantMessage);
-      cancelledSnapshot = {
-        fullResponse: assistantMessage.content,
-        toolCalls: assistantMessage.toolCalls,
-        timeline: assistantMessage.timeline
-      };
-      inFlightTurn.cancelledSnapshotSaved = true;
-      inFlightTurn.cancelled = true;
-    }
-  }
-
-  cancelledTurn = true;
-  responseBuffer = '';
-  currentTurnToolCalls = [];
-  currentTurnTimeline = [];
-  currentTurnSeq = 0;
-  if (inFlightTurn) {
-    inFlightTurn.cancelled = true;
-  }
-  return { success: true, cancelledSnapshot };
-}
-
-function stopClaudeSession() {
-  if (!claudeProcess) {
-    console.log('No Claude session running');
-    return;
-  }
-
-  console.log('Stopping Claude session...');
-  claudeProcess.kill('SIGTERM');
-  claudeProcess = null;
-  claudeReady = false;
-  sessionInitialized = false;
-  conversationHistory = [];
-  currentTurnToolCalls = [];
-  currentTurnTimeline = [];
-  currentTurnSeq = 0;
-  inFlightTurn = null;
-}
-
-function handleClaudeMessage(msg) {
-  console.log('Claude message:', msg.type, msg.subtype || '');
-
-  // Store all events for debugging/analysis
-  currentTurnEvents.push(msg);
-
-  if (msg.type === 'system' && msg.subtype === 'init') {
-    // Session initialization - contains model, tools, etc.
-    sessionMetadata = {
-      model: msg.model,
-      tools: msg.tools,
-      sessionId: msg.session_id,
-      claudeCodeVersion: msg.claude_code_version,
-      agents: msg.agents
-    };
-    console.log('Session initialized:', sessionMetadata.model);
-    if (!sessionInitialized) {
-      sessionInitialized = true;
-      broadcastToClients({
-        type: 'session-init',
-        model: msg.model,
-        claudeCodeVersion: msg.claude_code_version
-      });
-    } else {
-      broadcastToClients({
-        type: 'session-reinit',
-        model: msg.model,
-        claudeCodeVersion: msg.claude_code_version
-      });
-    }
-  } else if (msg.type === 'assistant') {
-    if (cancelledTurn) return; // Silently drain until result
-    // Assistant message with content - contains model and usage info
-    const message = msg.message;
-    if (message?.content) {
-      for (const block of message.content) {
-        if (block.type === 'text') {
-          // Text already streamed via stream_event deltas; skip to avoid duplication
-        } else if (block.type === 'tool_use') {
-          // Tool call - broadcast it
-          console.log('Tool call:', block.name, JSON.stringify(block.input).slice(0, 100));
-          const timelineEvent = {
-            type: 'tool',
-            seq: ++currentTurnSeq,
-            toolName: block.name,
-            input: block.input
-          };
-          currentTurnToolCalls.push({ toolName: block.name, input: block.input });
-          appendTurnTimeline(timelineEvent);
-          if (inFlightTurn) {
-            inFlightTurn.toolCalls.push({ toolName: block.name, input: block.input });
-            inFlightTurn.timeline.push(timelineEvent);
-          }
-          broadcastToClients({
-            type: 'tool-call',
-            seq: timelineEvent.seq,
-            toolName: block.name,
-            toolId: block.id,
-            input: block.input
-          });
-        }
-      }
-    }
-    // Update model info if present
-    if (message?.model) {
-      sessionMetadata.model = message.model;
-    }
-  } else if (msg.type === 'stream_event') {
-    if (cancelledTurn) return; // Silently drain until result
-    // Streaming events from --include-partial-messages
-    const event = msg.event;
-    if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
-      responseBuffer += event.delta.text;
-      const timelineEvent = {
-        type: 'text',
-        seq: ++currentTurnSeq,
-        text: event.delta.text
-      };
-      appendTurnTimeline(timelineEvent);
-      if (inFlightTurn) {
-        inFlightTurn.partialText += event.delta.text;
-        const timelineLast = inFlightTurn.timeline[inFlightTurn.timeline.length - 1];
-        if (timelineEvent.type === 'text' && timelineLast?.type === 'text') {
-          timelineLast.text = `${timelineLast.text || ''}${timelineEvent.text || ''}`;
-          timelineLast.seq = timelineEvent.seq;
-        } else {
-          inFlightTurn.timeline.push({ ...timelineEvent });
-        }
-      }
-      broadcastToClients({
-        type: 'partial',
-        seq: timelineEvent.seq,
-        text: event.delta.text
-      });
-    }
-  } else if (msg.type === 'result') {
-    // Final result - turn is done, reset cancel flag
-    const wasCancelled = cancelledTurn;
-    cancelledTurn = false;
-    currentTurnEvents = [];
-
-    if (wasCancelled) {
-      responseBuffer = '';
-      currentTurnToolCalls = [];
-      currentTurnTimeline = [];
-      currentTurnSeq = 0;
-      inFlightTurn = null;
-      console.log('Cancelled turn finished draining, session ready for next message');
-      return;
-    }
-
-    const fullResponse = responseBuffer;
-    responseBuffer = '';
-
-    const spokenSummary = extractSpokenSummary(fullResponse);
-
-    // Extract detailed metadata from result
-    const metadata = {
-      durationMs: msg.duration_ms,
-      durationApiMs: msg.duration_api_ms,
-      numTurns: msg.num_turns,
-      totalCostUsd: msg.total_cost_usd,
-      usage: msg.usage,
-      modelUsage: msg.modelUsage,
-      isError: msg.is_error
-    };
-
-    console.log('Result:', JSON.stringify({
-      duration: metadata.durationMs,
-      cost: metadata.totalCostUsd,
-      turns: metadata.numTurns,
-      models: Object.keys(metadata.modelUsage || {})
-    }));
-
-    // Store in history
-    const assistantMessage = {
-      id: nextMessageId++,
-      type: 'assistant',
-      content: fullResponse,
-      spokenSummary,
-      toolCalls: currentTurnToolCalls,
-      timeline: currentTurnTimeline,
-      spokenDelivered: !spokenSummary,
-      metadata,
-      timestamp: Date.now()
-    };
-    conversationHistory.push(assistantMessage);
-    currentTurnToolCalls = [];
-    currentTurnTimeline = [];
-    currentTurnSeq = 0;
-    inFlightTurn = null;
-
-    broadcastToClients({
-      type: 'response',
-      fullResponse,
-      spokenSummary,
-      toolCalls: assistantMessage.toolCalls,
-      timeline: assistantMessage.timeline,
-      model: sessionMetadata.model,
-      metadata
-    });
-
-    // Synthesize TTS audio asynchronously
-    if (spokenSummary && isTTSReady() && getTTSEnabledClients().length > 0) {
-      synthesizeAndBroadcastAudio(spokenSummary, assistantMessage.id);
-    }
-  } else if (msg.type === 'error') {
-    broadcastToClients({
-      type: 'error',
-      message: msg.error?.message || msg.message || 'Unknown error'
-    });
-  }
-}
-
-function extractSpokenSummary(response) {
-  const matches = [...response.matchAll(/\[SPOKEN:\s*([\s\S]*?)\]/gi)];
-  if (matches.length > 0) {
-    return matches[matches.length - 1][1].trim();
-  }
-  // Fallback: use last paragraph
-  const paragraphs = response.trim().split('\n\n');
-  return paragraphs[paragraphs.length - 1].slice(0, 500);
-}
-
-function appendTurnTimeline(event) {
-  const last = currentTurnTimeline[currentTurnTimeline.length - 1];
-  if (event.type === 'text' && last?.type === 'text') {
-    last.text = `${last.text || ''}${event.text || ''}`;
-    last.seq = event.seq ?? last.seq;
-    return;
-  }
-  currentTurnTimeline.push(event);
-}
-
-function sendToClaud(userMessage) {
-  if (!claudeProcess || !claudeReady) {
-    return { error: 'Claude session not running' };
-  }
-  if (inFlightTurn) {
-    return { error: 'Claude is still processing the previous request' };
-  }
-
-  // Format message for stream-json input
-  const message = {
-    type: 'user',
-    message: {
-      role: 'user',
-      content: userMessage
-    }
-  };
-
-  cancelledTurn = false;
-  responseBuffer = '';
-  currentTurnToolCalls = [];
-  currentTurnTimeline = [];
-  currentTurnSeq = 0;
-  inFlightTurn = {
-    userMessage,
-    startedAt: Date.now(),
-    partialText: '',
-    toolCalls: [],
-    timeline: []
-  };
-  claudeProcess.stdin.write(JSON.stringify(message) + '\n');
-
-  return { success: true };
-}
-
-function broadcastToClients(message) {
-  const json = JSON.stringify(message);
-  for (const client of connectedClients) {
-    if (client.readyState === 1) { // WebSocket.OPEN
-      client.send(json);
-    }
-  }
-}
-
-async function synthesizeAndBroadcastAudio(text, messageId = null, targetClient = null) {
-  try {
-    const ttsClients = getTTSEnabledClients(targetClient);
-    if (ttsClients.length === 0) {
-      return;
-    }
-
-    console.log(`[TTS] Synthesizing: "${text.slice(0, 80)}..."`);
-    const { audio, samplingRate } = await synthesize(text);
-    console.log(`[TTS] Done: ${audio.length} samples @ ${samplingRate}Hz`);
-
-    // Send metadata first
-    const meta = JSON.stringify({ type: 'tts-audio', samplingRate, numSamples: audio.length });
-    for (const client of ttsClients) {
-      client.send(meta);
-    }
-
-    // Send raw PCM as binary
-    const buffer = Buffer.from(audio.buffer);
-    for (const client of ttsClients) {
-      client.send(buffer);
-    }
-
-    if (messageId != null) {
-      const msg = conversationHistory.find((m) => m.id === messageId);
-      if (msg) {
-        msg.spokenDelivered = true;
-      }
-    }
-  } catch (err) {
-    console.error('[TTS] Synthesis error:', err);
-    broadcastToClients({ type: 'tts-error', message: err.message });
-  }
-}
-
 async function readTmuxAgentStatus() {
   try {
     const brokerScript = join(__dirname, 'tmux-broker.js');
@@ -771,38 +1149,42 @@ wss.on('connection', (ws) => {
   ws.ttsEnabled = true;
   connectedClients.add(ws);
 
-  // Send current session status
-  ws.send(JSON.stringify({
-    type: 'session-status',
-    running: claudeReady,
-    hasProcess: !!claudeProcess
-  }));
+  broadcastSessionStatus(ws);
   publishTmuxAgentStatus(true).catch(() => {});
 
   ws.on('message', (data) => {
     try {
       const message = JSON.parse(data.toString());
-      console.log('Received:', message.type);
 
       if (message.type === 'start-session') {
-        startClaudeSession();
-        ws.send(JSON.stringify({
-          type: 'session-status',
-          running: claudeReady,
-          hasProcess: !!claudeProcess
-        }));
+        startSession();
+        broadcastSessionStatus(ws);
 
       } else if (message.type === 'stop-session') {
-        stopClaudeSession();
+        stopSession();
+        broadcastSessionStatus(ws);
+
+      } else if (message.type === 'restart-session') {
+        restartSession();
+        broadcastSessionStatus(ws);
+
+      } else if (message.type === 'set-orchestrator') {
+        const kind = normalizeOrchestratorKind(message.orchestrator);
+        const result = switchOrchestrator(kind);
+        if (!result.success) {
+          ws.send(JSON.stringify({ type: 'error', message: result.error || 'Failed to switch orchestrator' }));
+        }
+
+      } else if (message.type === 'get-orchestrator') {
         ws.send(JSON.stringify({
-          type: 'session-status',
-          running: false,
-          hasProcess: false
+          type: 'orchestrator-changed',
+          orchestrator: activeOrchestratorKind,
+          label: orchestratorLabel(activeOrchestratorKind),
+          supportedOrchestrators: SUPPORTED_ORCHESTRATORS
         }));
 
       } else if (message.type === 'get-history') {
         const activeTurn = inFlightTurn && !inFlightTurn.cancelled ? inFlightTurn : null;
-        // Send conversation history to reconnecting client
         ws.send(JSON.stringify({
           type: 'history',
           messages: conversationHistory,
@@ -817,15 +1199,11 @@ wss.on('connection', (ws) => {
         }
 
       } else if (message.type === 'clear-history') {
-        // Clear conversation history
         conversationHistory = [];
-        console.log('Conversation history cleared');
-        ws.send(JSON.stringify({
-          type: 'history-cleared'
-        }));
+        ws.send(JSON.stringify({ type: 'history-cleared' }));
 
       } else if (message.type === 'cancel-request') {
-        const interruptResult = interruptClaude();
+        const interruptResult = interruptSession();
         broadcastToClients({
           type: 'request-cancelled',
           success: interruptResult.success,
@@ -834,31 +1212,16 @@ wss.on('connection', (ws) => {
           timeline: interruptResult.cancelledSnapshot?.timeline || []
         });
 
-      } else if (message.type === 'restart-session') {
-        stopClaudeSession();
-        startClaudeSession();
-        ws.send(JSON.stringify({
-          type: 'session-status',
-          running: claudeReady,
-          hasProcess: !!claudeProcess
-        }));
-
       } else if (message.type === 'set-tts-enabled') {
         ws.ttsEnabled = message.enabled !== false;
 
       } else if (message.type === 'list-tmux-sessions') {
         listTmuxSessions()
           .then((sessions) => {
-            ws.send(JSON.stringify({
-              type: 'tmux-sessions',
-              sessions
-            }));
+            ws.send(JSON.stringify({ type: 'tmux-sessions', sessions }));
           })
           .catch((err) => {
-            ws.send(JSON.stringify({
-              type: 'error',
-              message: `Failed to list tmux sessions: ${err.message}`
-            }));
+            ws.send(JSON.stringify({ type: 'error', message: `Failed to list tmux sessions: ${err.message}` }));
           });
 
       } else if (message.type === 'create-tmux-session') {
@@ -871,19 +1234,13 @@ wss.on('connection', (ws) => {
             }));
           })
           .catch((err) => {
-            ws.send(JSON.stringify({
-              type: 'error',
-              message: `Failed to create tmux session: ${err.message}`
-            }));
+            ws.send(JSON.stringify({ type: 'error', message: `Failed to create tmux session: ${err.message}` }));
           });
 
       } else if (message.type === 'summarize-tmux-session') {
         const sessionName = String(message.sessionName || '').trim();
         if (!sessionName) {
-          ws.send(JSON.stringify({
-            type: 'error',
-            message: 'Missing tmux session name to summarize'
-          }));
+          ws.send(JSON.stringify({ type: 'error', message: 'Missing tmux session name to summarize' }));
           return;
         }
 
@@ -899,19 +1256,14 @@ wss.on('connection', (ws) => {
           message: `Reviewing tmux session ${sessionName}...`
         }));
 
-        const result = sendToClaud(summaryPrompt);
+        const result = sendToOrchestrator(summaryPrompt);
         if (result.error) {
-          ws.send(JSON.stringify({
-            type: 'error',
-            message: result.error
-          }));
+          ws.send(JSON.stringify({ type: 'error', message: result.error }));
         }
 
       } else if (message.type === 'voice-command') {
         const transcript = message.transcript;
-        console.log(`Voice command: "${transcript}"`);
 
-        // Store user message in history
         conversationHistory.push({
           id: nextMessageId++,
           type: 'user',
@@ -919,26 +1271,21 @@ wss.on('connection', (ws) => {
           timestamp: Date.now()
         });
 
-        if (!claudeReady) {
+        if (!sessionReady || !orchestrator?.isReady()) {
           ws.send(JSON.stringify({
             type: 'error',
-            message: 'Claude session not running. Start session first.'
+            message: `${orchestratorLabel(activeOrchestratorKind)} session not running. Start session first.`
           }));
           return;
         }
 
-        ws.send(JSON.stringify({
-          type: 'status',
-          message: 'Processing...'
-        }));
+        ws.send(JSON.stringify({ type: 'status', message: 'Processing...' }));
 
-        const result = sendToClaud(transcript);
+        const result = sendToOrchestrator(transcript);
         if (result.error) {
-          ws.send(JSON.stringify({
-            type: 'error',
-            message: result.error
-          }));
+          ws.send(JSON.stringify({ type: 'error', message: result.error }));
         }
+
       } else if (message.type === 'transcribe-audio') {
         const { requestId, audioBase64, mimeType } = message;
 
@@ -963,11 +1310,7 @@ wss.on('connection', (ws) => {
         const audioBuffer = Buffer.from(audioBase64, 'base64');
         transcribeAudioBuffer(audioBuffer, mimeType)
           .then((text) => {
-            ws.send(JSON.stringify({
-              type: 'stt-result',
-              requestId,
-              text
-            }));
+            ws.send(JSON.stringify({ type: 'stt-result', requestId, text }));
           })
           .catch((err) => {
             ws.send(JSON.stringify({
@@ -978,17 +1321,13 @@ wss.on('connection', (ws) => {
           });
       }
     } catch (err) {
-      ws.send(JSON.stringify({
-        type: 'error',
-        message: `Invalid message: ${err.message}`
-      }));
+      ws.send(JSON.stringify({ type: 'error', message: `Invalid message: ${err.message}` }));
     }
   });
 
   ws.on('close', () => {
     console.log('Client disconnected');
     connectedClients.delete(ws);
-    // Note: Claude session stays running for reconnection
   });
 });
 
@@ -1000,19 +1339,16 @@ server.listen(PORT, () => {
   console.log(`Voice terminal server running on port ${PORT}`);
   console.log(`Access at: https://${process.env.VM_NAME || 'your-vm'}.exe.xyz:${PORT}/`);
 
-  // Auto-start Claude session
-  startClaudeSession();
+  setActiveOrchestrator(activeOrchestratorKind);
+  startSession();
   startSTTWorker();
   startTmuxStatusPolling();
-
-  // Fire-and-forget TTS model loading
   loadTTSModel();
 });
 
-// Graceful shutdown
 process.on('SIGTERM', () => {
   console.log('Shutting down...');
-  stopClaudeSession();
+  stopSession();
   stopSTTWorker();
   stopTmuxStatusPolling();
   process.exit(0);
@@ -1020,7 +1356,7 @@ process.on('SIGTERM', () => {
 
 process.on('SIGINT', () => {
   console.log('Shutting down...');
-  stopClaudeSession();
+  stopSession();
   stopSTTWorker();
   stopTmuxStatusPolling();
   process.exit(0);

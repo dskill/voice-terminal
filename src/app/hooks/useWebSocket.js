@@ -2,7 +2,9 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 
 export default function useWebSocket() {
   const [isConnected, setIsConnected] = useState(false);
-  const [claudeRunning, setClaudeRunning] = useState(false);
+  const [sessionRunning, setSessionRunning] = useState(false);
+  const [orchestrator, setOrchestrator] = useState('claude');
+  const [supportedOrchestrators, setSupportedOrchestrators] = useState(['claude', 'codex']);
   const wsRef = useRef(null);
   const handlersRef = useRef({});
   const reconnectTimer = useRef(null);
@@ -29,6 +31,7 @@ export default function useWebSocket() {
 
       ws.onopen = () => {
         setIsConnected(true);
+        send('get-orchestrator');
         send('get-history');
       };
 
@@ -43,7 +46,6 @@ export default function useWebSocket() {
       };
 
       ws.onmessage = (event) => {
-        // Binary messages are TTS audio data
         if (event.data instanceof ArrayBuffer) {
           const handler = handlersRef.current['tts-audio-data'];
           if (handler) handler(event.data);
@@ -52,16 +54,25 @@ export default function useWebSocket() {
 
         const data = JSON.parse(event.data);
 
-        // Handle session status internally
         if (data.type === 'session-status') {
-          setClaudeRunning(data.running);
+          setSessionRunning(!!data.running);
+          if (data.orchestrator) setOrchestrator(data.orchestrator);
+          if (Array.isArray(data.supportedOrchestrators) && data.supportedOrchestrators.length > 0) {
+            setSupportedOrchestrators(data.supportedOrchestrators);
+          }
         } else if (data.type === 'session-init') {
-          setClaudeRunning(true);
+          setSessionRunning(true);
+          if (data.orchestrator) setOrchestrator(data.orchestrator);
         } else if (data.type === 'session-ended') {
-          setClaudeRunning(false);
+          setSessionRunning(false);
+          if (data.orchestrator) setOrchestrator(data.orchestrator);
+        } else if (data.type === 'orchestrator-changed') {
+          if (data.orchestrator) setOrchestrator(data.orchestrator);
+          if (Array.isArray(data.supportedOrchestrators) && data.supportedOrchestrators.length > 0) {
+            setSupportedOrchestrators(data.supportedOrchestrators);
+          }
         }
 
-        // Forward to registered handlers
         if (data.type === 'stt-result' && data.requestId) {
           const pending = sttPendingRef.current.get(data.requestId);
           if (pending) {
@@ -89,11 +100,12 @@ export default function useWebSocket() {
         sttPendingRef.current.delete(id);
       }
     };
-  }, []);
+  }, [send]);
 
   const startSession = useCallback(() => send('start-session'), [send]);
   const stopSession = useCallback(() => send('stop-session'), [send]);
   const restartSession = useCallback(() => send('restart-session'), [send]);
+  const setSessionOrchestrator = useCallback((next) => send('set-orchestrator', { orchestrator: next }), [send]);
   const sendCommand = useCallback((transcript) => send('voice-command', { transcript }), [send]);
   const sendAudioForSTT = useCallback(async (blob) => {
     const requestId = (globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -132,6 +144,7 @@ export default function useWebSocket() {
       }
     });
   }, [send]);
+
   const cancelRequest = useCallback(() => send('cancel-request'), [send]);
   const clearHistory = useCallback(() => send('clear-history'), [send]);
   const getHistory = useCallback(() => send('get-history'), [send]);
@@ -142,12 +155,15 @@ export default function useWebSocket() {
 
   return {
     isConnected,
-    claudeRunning,
+    sessionRunning,
+    orchestrator,
+    supportedOrchestrators,
     send,
     setHandler,
     startSession,
     stopSession,
     restartSession,
+    setSessionOrchestrator,
     sendCommand,
     sendAudioForSTT,
     cancelRequest,

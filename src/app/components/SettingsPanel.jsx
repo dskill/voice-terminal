@@ -6,6 +6,9 @@ export default function SettingsPanel({
   onToggleAutoSend,
   ttsEnabled,
   onToggleTTSEnabled,
+  orchestrator,
+  orchestratorOptions,
+  onSelectOrchestrator,
   onRestartSession,
   onClose
 }) {
@@ -24,6 +27,22 @@ export default function SettingsPanel({
           </div>
 
           <div className="p-4 space-y-4">
+            <label className="flex flex-col gap-2 px-3 py-2 rounded-lg bg-slate-900/70 border border-slate-700">
+              <div>
+                <div className="text-sm text-slate-100 font-medium">Orchestrator</div>
+                <div className="text-xs text-slate-400">Choose which backend agent runs voice commands.</div>
+              </div>
+              <select
+                value={orchestrator}
+                onChange={(e) => onSelectOrchestrator(e.target.value)}
+                className="w-full rounded-md border border-slate-600 bg-slate-950 px-2 py-1.5 text-sm text-slate-100"
+              >
+                {orchestratorOptions.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+
             <label className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-slate-900/70 border border-slate-700">
               <div>
                 <div className="text-sm text-slate-100 font-medium">Auto-send</div>
@@ -40,7 +59,7 @@ export default function SettingsPanel({
             <label className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-slate-900/70 border border-slate-700">
               <div>
                 <div className="text-sm text-slate-100 font-medium">Enable TTS</div>
-                <div className="text-xs text-slate-400">Play spoken response audio for Claude replies.</div>
+                <div className="text-xs text-slate-400">Play spoken response audio for assistant replies.</div>
               </div>
               <input
                 type="checkbox"
@@ -54,7 +73,7 @@ export default function SettingsPanel({
               onClick={onRestartSession}
               className="w-full px-3 py-2 rounded-lg text-sm font-medium border bg-cyan-700/70 border-cyan-500/40 text-cyan-50 hover:bg-cyan-600/80 transition-colors"
             >
-              Restart Claude Session
+              Restart Session
             </button>
           </div>
         </div>

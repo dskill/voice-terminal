@@ -16,15 +16,16 @@ function StatusBadge({ label, connected }) {
 
 export default function Controls({
   isConnected,
-  claudeRunning,
+  sessionRunning,
+  orchestratorLabel,
   onRefresh,
 }) {
   return (
     <div className="flex items-center justify-center gap-2 flex-wrap px-3 py-3">
       <StatusBadge label={`WS: ${isConnected ? 'On' : 'Off'}`} connected={isConnected} />
       <StatusBadge
-        label={`Claude: ${claudeRunning ? 'On' : 'Off'}`}
-        connected={claudeRunning}
+        label={`${orchestratorLabel}: ${sessionRunning ? 'On' : 'Off'}`}
+        connected={sessionRunning}
       />
 
       <button

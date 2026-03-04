@@ -42,6 +42,15 @@ function buildStreamingFromTimeline(timeline, fallbackText = '', fallbackToolCal
 }
 
 export default function App() {
+  const ORCHESTRATOR_OPTIONS = [
+    { value: 'claude', label: 'Claude' },
+    { value: 'codex', label: 'Codex (Spark)' },
+  ];
+  const formatOrchestratorLabel = (kind) => {
+    if (kind === 'codex') return 'Codex (Spark)';
+    return 'Claude';
+  };
+
   const [messages, setMessages] = useState([]);
   const [streamingMessage, setStreamingMessage] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -65,6 +74,10 @@ export default function App() {
   const [tmuxStatusBySession, setTmuxStatusBySession] = useState({});
   const [tmuxUnreadCompletions, setTmuxUnreadCompletions] = useState({});
   const [doneFlashVisible, setDoneFlashVisible] = useState(false);
+  const [selectedOrchestrator, setSelectedOrchestrator] = useState(() => {
+    const stored = localStorage.getItem('voice-terminal-orchestrator');
+    return stored === 'codex' ? 'codex' : 'claude';
+  });
   const completionSeenRef = useRef({});
   const tmuxStatusBaselineReadyRef = useRef(false);
   const doneFlashTimerRef = useRef(null);
@@ -123,16 +136,27 @@ export default function App() {
     });
 
     ws.setHandler('session-init', (data) => {
-      addMessage('status', 'Session started');
+      const label = formatOrchestratorLabel(data?.orchestrator || ws.orchestrator);
+      addMessage('status', `${label} session started`);
     });
 
     ws.setHandler('session-reinit', (data) => {
+      const label = formatOrchestratorLabel(data?.orchestrator || ws.orchestrator);
       const model = data?.model ? ` (${data.model})` : '';
-      addMessage('status', `Session ready${model}`);
+      addMessage('status', `${label} session ready${model}`);
     });
 
     ws.setHandler('session-ended', (data) => {
-      addMessage('status', `Claude session ended (code: ${data.code})`);
+      const label = formatOrchestratorLabel(data?.orchestrator || ws.orchestrator);
+      addMessage('status', `${label} session ended (code: ${data.code})`);
+    });
+
+    ws.setHandler('orchestrator-changed', (data) => {
+      if (!data?.orchestrator) return;
+      setSelectedOrchestrator(data.orchestrator);
+      localStorage.setItem('voice-terminal-orchestrator', data.orchestrator);
+      setLiveText(`Switched to ${formatOrchestratorLabel(data.orchestrator)}`);
+      setTimeout(() => setLiveText(''), 1500);
     });
 
     ws.setHandler('status', (data) => {
@@ -312,7 +336,7 @@ export default function App() {
     ws.setHandler('history-cleared', () => {
       // handled by local state clear
     });
-  }, [ws.setHandler, ws.listTmuxSessions, addMessage, tts.playAudio, activeTmuxSession]);
+  }, [ws.setHandler, ws.listTmuxSessions, addMessage, tts.playAudio, activeTmuxSession, ws.orchestrator]);
 
   const requestWakeLock = useCallback(async () => {
     if (!('wakeLock' in navigator)) return;
@@ -360,8 +384,8 @@ export default function App() {
 
   const startRecording = useCallback(async () => {
     if (isProcessing || isTranscribing || speech.isListening) return;
-    if (!ws.claudeRunning) {
-      setLiveText('Start Claude session first');
+    if (!ws.sessionRunning) {
+      setLiveText(`Start ${formatOrchestratorLabel(selectedOrchestrator)} session first`);
       return;
     }
     tts.unlock(); // iOS gesture unlock
@@ -373,7 +397,7 @@ export default function App() {
     } else {
       setLiveText('Unable to start microphone');
     }
-  }, [isProcessing, isTranscribing, speech, ws.claudeRunning, tts, unlockDebugCues, playMicStart]);
+  }, [isProcessing, isTranscribing, speech, ws.sessionRunning, tts, unlockDebugCues, playMicStart, selectedOrchestrator]);
 
   const stopRecording = useCallback(async () => {
     if (!speech.isListening) return;
@@ -401,7 +425,7 @@ export default function App() {
         setShowInput(false);
         setInputText('');
         setIsProcessing(true);
-        setLiveText('Sending to Claude...');
+        setLiveText(`Sending to ${formatOrchestratorLabel(selectedOrchestrator)}...`);
         addMessage('user', finalText);
         const finalCommand = activeTmuxSession
           ? `this speech command is intended for use with tmux session ${activeTmuxSession}\n\n${finalText}`
@@ -419,7 +443,7 @@ export default function App() {
     } finally {
       setIsTranscribing(false);
     }
-  }, [speech, ws, autoSend, addMessage, activeTmuxSession, playMicStop]);
+  }, [speech, ws, autoSend, addMessage, activeTmuxSession, playMicStop, selectedOrchestrator]);
 
   const toggleRecording = useCallback(() => {
     if (isProcessing || isTranscribing) return;
@@ -458,13 +482,13 @@ export default function App() {
     }
 
     setIsProcessing(true);
-    setLiveText('Sending to Claude...');
+    setLiveText(`Sending to ${formatOrchestratorLabel(selectedOrchestrator)}...`);
     addMessage('user', text);
     const finalCommand = activeTmuxSession
       ? `this speech command is intended for use with tmux session ${activeTmuxSession}\n\n${text}`
       : text;
     ws.sendCommand(finalCommand);
-  }, [inputText, addMessage, ws, activeTmuxSession]);
+  }, [inputText, addMessage, ws, activeTmuxSession, selectedOrchestrator]);
 
   const toggleAutoSend = useCallback((enabled) => {
     setAutoSend(enabled);
@@ -500,8 +524,19 @@ export default function App() {
     setShowInput(false);
     setInputText('');
     setIsProcessing(false);
-    setLiveText('Restarting Claude session...');
+    setLiveText(`Restarting ${formatOrchestratorLabel(selectedOrchestrator)} session...`);
     setShowSettings(false);
+  }, [ws, selectedOrchestrator]);
+
+  const handleSelectOrchestrator = useCallback((next) => {
+    const normalized = next === 'codex' ? 'codex' : 'claude';
+    setSelectedOrchestrator(normalized);
+    localStorage.setItem('voice-terminal-orchestrator', normalized);
+    setMessages([]);
+    setStreamingMessage(null);
+    setIsProcessing(false);
+    ws.setSessionOrchestrator(normalized);
+    setLiveText(`Switching to ${formatOrchestratorLabel(normalized)}...`);
   }, [ws]);
 
   const openSessionMenu = useCallback(() => {
@@ -593,6 +628,14 @@ export default function App() {
   }, [ws.isConnected, ws.setTTSEnabled, ttsEnabled]);
 
   useEffect(() => {
+    if (!ws.isConnected) return;
+    const desired = selectedOrchestrator === 'codex' ? 'codex' : 'claude';
+    if (ws.orchestrator && ws.orchestrator !== desired) {
+      ws.setSessionOrchestrator(desired);
+    }
+  }, [ws.isConnected, ws.orchestrator, ws.setSessionOrchestrator, selectedOrchestrator]);
+
+  useEffect(() => {
     const wasSpeaking = prevIsSpeakingRef.current;
     if (!wasSpeaking && tts.isSpeaking) {
       playTTSStart();
@@ -624,7 +667,8 @@ export default function App() {
       <div className="relative z-20 flex items-center justify-center border-b border-slate-800/80 bg-slate-900/90 backdrop-blur-sm">
         <Controls
           isConnected={ws.isConnected}
-          claudeRunning={ws.claudeRunning}
+          sessionRunning={ws.sessionRunning}
+          orchestratorLabel={formatOrchestratorLabel(ws.orchestrator || selectedOrchestrator)}
           onRefresh={() => location.reload()}
         />
       </div>
@@ -690,7 +734,7 @@ export default function App() {
                 audioLevel={speech.audioLevel}
                 isProcessing={isProcessing}
                 isSendMode={false}
-                disabled={!ws.claudeRunning || isTranscribing}
+                disabled={!ws.sessionRunning || isTranscribing}
                 onClick={toggleRecording}
                 onCancel={cancelProcessing}
                 onLongPress={openSessionMenu}
@@ -732,6 +776,9 @@ export default function App() {
         onToggleAutoSend={toggleAutoSend}
         ttsEnabled={ttsEnabled}
         onToggleTTSEnabled={toggleTTSEnabled}
+        orchestrator={selectedOrchestrator}
+        orchestratorOptions={ORCHESTRATOR_OPTIONS.filter((o) => (ws.supportedOrchestrators || []).includes(o.value))}
+        onSelectOrchestrator={handleSelectOrchestrator}
         onRestartSession={restartSession}
         onClose={() => setShowSettings(false)}
       />
