@@ -327,20 +327,25 @@ async function cmdSendInput(opts) {
   const pressEnter = !opts['no-enter'];
   const payload = opts.text;
   const payloadBytes = Buffer.byteLength(payload);
+  const hasPayload = payloadBytes > 0;
 
   const result = await withPaneLock(key, async () => {
-    const bufferName = `voice_terminal_${randomUUID().replace(/-/g, '')}`;
-    await runTmux(['load-buffer', '-b', bufferName, '-'], { input: payload });
-    if (pressEnter) {
-      // Keep submit separate from pasted content so line editors treat Enter as a real keypress.
-      // Use -p so bracketed paste-aware apps (like Codex panes) can safely handle large payloads.
-      await runTmux([
-        'paste-buffer', '-d', '-r', '-p', '-b', bufferName, '-t', resolved.target,
-        ';',
-        'send-keys', '-t', resolved.target, SUBMIT_KEY
-      ]);
-    } else {
-      await runTmux(['paste-buffer', '-d', '-r', '-p', '-b', bufferName, '-t', resolved.target]);
+    if (hasPayload) {
+      const bufferName = `voice_terminal_${randomUUID().replace(/-/g, '')}`;
+      await runTmux(['load-buffer', '-b', bufferName, '-'], { input: payload });
+      if (pressEnter) {
+        // Keep submit separate from pasted content so line editors treat Enter as a real keypress.
+        // Use -p so bracketed paste-aware apps (like Codex panes) can safely handle large payloads.
+        await runTmux([
+          'paste-buffer', '-d', '-r', '-p', '-b', bufferName, '-t', resolved.target,
+          ';',
+          'send-keys', '-t', resolved.target, SUBMIT_KEY
+        ]);
+      } else {
+        await runTmux(['paste-buffer', '-d', '-r', '-p', '-b', bufferName, '-t', resolved.target]);
+      }
+    } else if (pressEnter) {
+      await runTmux(['send-keys', '-t', resolved.target, SUBMIT_KEY]);
     }
     return {
       ok: true,
