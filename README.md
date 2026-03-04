@@ -26,9 +26,27 @@ tmux new-session -d -s voice-terminal -c /path/to/voice-terminal '. .venv/bin/ac
 **Note:** The server spawns a Claude Code subprocess. If you run `npm run dev` directly from within a Claude Code session, the subprocess will fail because Claude Code sets a `CLAUDECODE` environment variable to prevent nested sessions. Running in tmux gives the server a clean shell environment without that variable.
 
 To view logs: `tmux attach -t voice-terminal`
-To restart: `tmux kill-session -t voice-terminal` then re-run the command above.
 
 Access at `https://your-vm.exe.xyz:3456/`
+
+## Restarting
+
+- **UI "Restart" button**: restarts only the orchestrator session (Claude/Codex process) and clears in-memory conversation state. It does **not** restart `node src/server.js`.
+- **Full server restart (recommended after server code/prompt-file changes)**:
+
+```bash
+tmux attach -t voice-terminal
+# inside tmux pane voice-terminal:0.0
+Ctrl+C
+npm run dev
+```
+
+- **Hard restart from outside tmux**:
+
+```bash
+tmux kill-session -t voice-terminal
+tmux new-session -d -s voice-terminal -c /path/to/voice-terminal '. .venv/bin/activate && npm run dev'
+```
 
 ## Usage
 
@@ -40,7 +58,7 @@ Access at `https://your-vm.exe.xyz:3456/`
 
 ## Controls
 
-- **Restart** - Restart Claude session and reset in-memory conversation state
+- **Restart** - Restart orchestrator session and reset in-memory conversation state (not a Node server restart)
 - **Refresh** - Reload the page (useful for testing changes)
 - **Cancel** - Discard current transcription without sending
 - **Spacebar** - Toggle recording (desktop)

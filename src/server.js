@@ -18,7 +18,7 @@ const PORT = process.env.PORT || 3456;
 const ORCHESTRATOR_CONFIG = {
   claude: {
     kind: 'claude',
-    label: 'Claude',
+    label: 'Claude Opus 4.6',
     defaultModel: 'claude-code'
   },
   'claude-sonnet-4-6': {
@@ -38,7 +38,7 @@ const SUPPORTED_ORCHESTRATORS = Object.keys(ORCHESTRATOR_CONFIG);
 function normalizeOrchestratorKind(kind) {
   if (kind === 'codex') return 'codex';
   if (kind === 'claude-sonnet-4-6') return 'claude-sonnet-4-6';
-  return 'claude';
+  return 'claude-sonnet-4-6';
 }
 
 function orchestratorLabel(kind) {
@@ -48,7 +48,7 @@ function orchestratorLabel(kind) {
 // Serve static files
 const distPath = join(__dirname, '../dist');
 const publicPath = join(__dirname, '../public');
-const systemPromptPath = join(__dirname, '../system-prompt.md');
+const systemPromptPath = join(__dirname, '../orchestrator-system-prompt.md');
 const staticPath = existsSync(distPath) ? distPath : publicPath;
 console.log(`Serving static files from: ${staticPath}`);
 app.use(express.static(staticPath));
@@ -60,7 +60,7 @@ const wss = new WebSocketServer({ server });
 // Orchestrator Session State
 // ============================================
 
-let activeOrchestratorKind = normalizeOrchestratorKind(process.env.ORCHESTRATOR || 'claude');
+let activeOrchestratorKind = normalizeOrchestratorKind(process.env.ORCHESTRATOR || 'claude-sonnet-4-6');
 let orchestrator = null;
 let sessionReady = false;
 let sessionInitialized = false;
@@ -266,8 +266,27 @@ function parseControlToolCalls(text) {
 
 function applyTmuxSessionContext(transcript) {
   const text = String(transcript || '');
-  if (!activeTmuxSessionName) return text;
-  return `this speech command is intended for use with tmux session ${activeTmuxSessionName}\n\n${text}`;
+  let contextLines = [];
+
+  // Include current session list from cached status
+  try {
+    const parsed = lastTmuxStatusJson ? JSON.parse(lastTmuxStatusJson) : null;
+    const sessions = Array.isArray(parsed?.sessions) ? parsed.sessions : [];
+    if (sessions.length > 0) {
+      const sessionList = sessions.map((s) => {
+        const marker = s.session === activeTmuxSessionName ? ' (active)' : '';
+        return `- ${s.session} [${s.state}]${marker}`;
+      }).join('\n');
+      contextLines.push(`Available tmux sessions:\n${sessionList}`);
+    }
+  } catch (_) { /* ignore parse errors */ }
+
+  if (activeTmuxSessionName) {
+    contextLines.push(`this speech command is intended for use with tmux session ${activeTmuxSessionName}`);
+  }
+
+  if (contextLines.length === 0) return text;
+  return `${contextLines.join('\n\n')}\n\n${text}`;
 }
 
 function resetTurnTracking() {

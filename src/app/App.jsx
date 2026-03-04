@@ -43,14 +43,14 @@ function buildStreamingFromTimeline(timeline, fallbackText = '', fallbackToolCal
 
 export default function App() {
   const ORCHESTRATOR_OPTIONS = [
-    { value: 'claude', label: 'Claude' },
+    { value: 'claude', label: 'Claude Opus 4.6' },
     { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
     { value: 'codex', label: 'Codex (Spark)' },
   ];
   const formatOrchestratorLabel = (kind) => {
     if (kind === 'codex') return 'Codex (Spark)';
     if (kind === 'claude-sonnet-4-6') return 'Claude Sonnet 4.6';
-    return 'Claude';
+    return 'Claude Opus 4.6';
   };
 
   const [messages, setMessages] = useState([]);
@@ -79,8 +79,9 @@ export default function App() {
   const [selectedOrchestrator, setSelectedOrchestrator] = useState(() => {
     const stored = localStorage.getItem('voice-terminal-orchestrator');
     if (stored === 'codex') return 'codex';
+    if (stored === 'claude') return 'claude';
     if (stored === 'claude-sonnet-4-6') return 'claude-sonnet-4-6';
-    return 'claude';
+    return 'claude-sonnet-4-6';
   });
   const completionSeenRef = useRef({});
   const tmuxStatusBaselineReadyRef = useRef(false);
