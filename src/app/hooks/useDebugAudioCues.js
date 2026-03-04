@@ -101,11 +101,22 @@ export default function useDebugAudioCues() {
     playTone({ startFreq: 1320, endFreq: 1180, type: 'sine', duration: 0.09, volume: 0.34, release: 0.09 });
   }, []);
 
+  const playSessionComplete = useCallback((count = 1) => {
+    const repeats = Math.max(1, Math.min(3, Number(count) || 1));
+    for (let i = 0; i < repeats; i += 1) {
+      const baseOffset = i * 0.18;
+      // Satisfying major-ish chime stack.
+      playTone({ startFreq: 740, endFreq: 920, type: 'triangle', duration: 0.12, volume: 0.34, release: 0.12, whenOffset: baseOffset, warm: true });
+      playTone({ startFreq: 920, endFreq: 1180, type: 'sine', duration: 0.11, volume: 0.22, release: 0.1, whenOffset: baseOffset + 0.03 });
+    }
+  }, []);
+
   return {
     unlock,
     playMicStart,
     playMicStop,
     playTTSStart,
     playTTSStop,
+    playSessionComplete,
   };
 }

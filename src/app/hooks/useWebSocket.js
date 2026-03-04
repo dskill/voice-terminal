@@ -151,6 +151,9 @@ export default function useWebSocket() {
   const listTmuxSessions = useCallback(() => send('list-tmux-sessions'), [send]);
   const createTmuxSession = useCallback((kind) => send('create-tmux-session', { kind }), [send]);
   const summarizeTmuxSession = useCallback((sessionName) => send('summarize-tmux-session', { sessionName }), [send]);
+  const switchActiveTmuxSession = useCallback((sessionName, source = 'ui') => {
+    return send('switch-active-tmux-session', { sessionName: sessionName || '', source });
+  }, [send]);
   const setTTSEnabled = useCallback((enabled) => send('set-tts-enabled', { enabled: !!enabled }), [send]);
 
   return {
@@ -172,6 +175,7 @@ export default function useWebSocket() {
     listTmuxSessions,
     createTmuxSession,
     summarizeTmuxSession,
+    switchActiveTmuxSession,
     setTTSEnabled,
   };
 }

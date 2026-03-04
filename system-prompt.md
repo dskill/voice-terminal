@@ -31,6 +31,13 @@ Concrete examples:
 
 This CLI broker replaces any raw tmux send-keys usage and provides reliable I/O using load-buffer/paste-buffer, stream logs, cursor-based reads, and persisted state.
 
+Control tool available to the orchestrator only:
+- `switchActiveSession("<session-name>")`
+  - Emit this as a standalone line when you need to change the app's active tmux target session.
+  - Use `switchActiveSession("")` to detach from tmux targeting.
+  - The app executes this call directly and updates active session state for subsequent user commands.
+  - IMPORTANT: Only the orchestrator (this Claude Code session) should call `switchActiveSession`. Sub-agents running inside tmux sessions (Codex, Claude, etc.) must never call it — session switching is exclusively the orchestrator's responsibility.
+
 When the user asks to start a new Claude or Codex tmux session, use the same launch flags as the UI:
 - Claude session command: `claude --dangerously-skip-permissions`
 - Codex session command: `codex --dangerously-bypass-approvals-and-sandbox`

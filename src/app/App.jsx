@@ -85,6 +85,7 @@ export default function App() {
   const completionSeenRef = useRef({});
   const tmuxStatusBaselineReadyRef = useRef(false);
   const doneFlashTimerRef = useRef(null);
+  const activeTmuxSyncedRef = useRef(false);
 
   const ws = useWebSocket();
   const speech = useSpeechRecognition();
@@ -95,6 +96,7 @@ export default function App() {
     playMicStop,
     playTTSStart,
     playTTSStop,
+    playSessionComplete,
   } = useDebugAudioCues();
   const ttsMetaRef = useRef(null);
   const prevIsSpeakingRef = useRef(false);
@@ -173,12 +175,29 @@ export default function App() {
 
     ws.setHandler('tmux-session-created', (data) => {
       if (!data?.name) return;
-      setActiveTmuxSession(data.name);
-      localStorage.setItem('voice-terminal-active-tmux', data.name);
+      ws.switchActiveTmuxSession(data.name, 'ui');
       setLiveText(`Attached to tmux session ${data.name}`);
       setTmuxUnreadCompletions((prev) => ({ ...prev, [data.name]: 0 }));
       ws.listTmuxSessions();
       setShowSessionMenu(false);
+    });
+
+    ws.setHandler('active-tmux-session-changed', (data) => {
+      const next = String(data?.sessionName || '').trim();
+      setActiveTmuxSession(next);
+      if (next) {
+        localStorage.setItem('voice-terminal-active-tmux', next);
+        const status = tmuxStatusBySession[next];
+        if (status) {
+          completionSeenRef.current[next] = status.completionCount;
+        }
+        setTmuxUnreadCompletions((prev) => ({ ...prev, [next]: 0 }));
+      } else {
+        localStorage.removeItem('voice-terminal-active-tmux');
+      }
+      if (data?.source === 'orchestrator-tool') {
+        setLiveText(next ? `AI switched active tmux session to ${next}` : 'AI detached tmux session');
+      }
     });
 
     ws.setHandler('tmux-agent-status', (data) => {
@@ -212,6 +231,7 @@ export default function App() {
           const previousSeen = Number(completionSeenRef.current[sessionName] || 0);
           const delta = Math.max(0, status.completionCount - previousSeen);
           if (delta > 0) {
+            playSessionComplete(delta);
             if (sessionName === activeTmuxSession) {
               if (doneFlashTimerRef.current) clearTimeout(doneFlashTimerRef.current);
               setDoneFlashVisible(true);
@@ -340,16 +360,22 @@ export default function App() {
     ws.setHandler('history-cleared', () => {
       // handled by local state clear
     });
-  }, [ws.setHandler, ws.listTmuxSessions, addMessage, tts.playAudio, activeTmuxSession, ws.orchestrator]);
+  }, [ws.setHandler, ws.listTmuxSessions, ws.switchActiveTmuxSession, addMessage, tts.playAudio, activeTmuxSession, ws.orchestrator, tmuxStatusBySession, playSessionComplete]);
 
   const requestWakeLock = useCallback(async () => {
     if (!('wakeLock' in navigator)) return;
+    if (document.visibilityState !== 'visible') return;
     try {
       if (!wakeLockRef.current) {
-        wakeLockRef.current = await navigator.wakeLock.request('screen');
-        wakeLockRef.current.addEventListener('release', () => {
+        const sentinel = await navigator.wakeLock.request('screen');
+        sentinel.addEventListener('release', () => {
+          if (wakeLockRef.current !== sentinel) return;
           wakeLockRef.current = null;
+          if (document.visibilityState === 'visible') {
+            requestWakeLock();
+          }
         });
+        wakeLockRef.current = sentinel;
       }
     } catch (e) {
       // Ignore wake lock failures (unsupported/browser policy)
@@ -364,10 +390,18 @@ export default function App() {
         requestWakeLock();
       }
     };
+    const onFocus = () => requestWakeLock();
+
     document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('focus', onFocus);
+    const refreshTimer = setInterval(() => {
+      requestWakeLock();
+    }, 15000);
 
     return () => {
       document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('focus', onFocus);
+      clearInterval(refreshTimer);
       if (wakeLockRef.current) {
         wakeLockRef.current.release().catch(() => {});
         wakeLockRef.current = null;
@@ -431,10 +465,7 @@ export default function App() {
         setIsProcessing(true);
         setLiveText(`Sending to ${formatOrchestratorLabel(selectedOrchestrator)}...`);
         addMessage('user', finalText);
-        const finalCommand = activeTmuxSession
-          ? `this speech command is intended for use with tmux session ${activeTmuxSession}\n\n${finalText}`
-          : finalText;
-        ws.sendCommand(finalCommand);
+        ws.sendCommand(finalText);
       } else {
         setInputText(text);
         setShowInput(true);
@@ -447,7 +478,7 @@ export default function App() {
     } finally {
       setIsTranscribing(false);
     }
-  }, [speech, ws, autoSend, addMessage, activeTmuxSession, playMicStop, selectedOrchestrator]);
+  }, [speech, ws, autoSend, addMessage, playMicStop, selectedOrchestrator]);
 
   const toggleRecording = useCallback(() => {
     if (isProcessing || isTranscribing) return;
@@ -488,11 +519,8 @@ export default function App() {
     setIsProcessing(true);
     setLiveText(`Sending to ${formatOrchestratorLabel(selectedOrchestrator)}...`);
     addMessage('user', text);
-    const finalCommand = activeTmuxSession
-      ? `this speech command is intended for use with tmux session ${activeTmuxSession}\n\n${text}`
-      : text;
-    ws.sendCommand(finalCommand);
-  }, [inputText, addMessage, ws, activeTmuxSession, selectedOrchestrator]);
+    ws.sendCommand(text);
+  }, [inputText, addMessage, ws, selectedOrchestrator]);
 
   const toggleAutoSend = useCallback((enabled) => {
     setAutoSend(enabled);
@@ -552,36 +580,24 @@ export default function App() {
 
   const handleSelectTmuxSession = useCallback((sessionName) => {
     const next = sessionName || '';
-    setActiveTmuxSession(next);
     if (next) {
-      localStorage.setItem('voice-terminal-active-tmux', next);
+      ws.switchActiveTmuxSession(next, 'ui');
       setLiveText(`Attached to tmux session ${next}`);
-      const status = tmuxStatusBySession[next];
-      if (status) {
-        completionSeenRef.current[next] = status.completionCount;
-      }
-      setTmuxUnreadCompletions((prev) => ({ ...prev, [next]: 0 }));
     } else {
-      localStorage.removeItem('voice-terminal-active-tmux');
+      ws.switchActiveTmuxSession('', 'ui');
       setLiveText('Detached from tmux session');
     }
     setShowSessionMenu(false);
-  }, [tmuxStatusBySession]);
+  }, [ws]);
 
   const handleReviewTmuxSession = useCallback((sessionName) => {
     const next = String(sessionName || '').trim();
     if (!next) return;
-    setActiveTmuxSession(next);
-    localStorage.setItem('voice-terminal-active-tmux', next);
-    const status = tmuxStatusBySession[next];
-    if (status) {
-      completionSeenRef.current[next] = status.completionCount;
-    }
-    setTmuxUnreadCompletions((prev) => ({ ...prev, [next]: 0 }));
+    ws.switchActiveTmuxSession(next, 'ui');
     ws.summarizeTmuxSession(next);
     setLiveText(`Attached and reviewing tmux session ${next}...`);
     setShowSessionMenu(false);
-  }, [ws, tmuxStatusBySession]);
+  }, [ws]);
 
   const handleCreateClaudeSession = useCallback(() => {
     ws.createTmuxSession('claude');
@@ -636,6 +652,14 @@ export default function App() {
   }, [speech.isListening, abortRecording]);
 
   useEffect(() => {
+    if (!ws.isConnected || activeTmuxSyncedRef.current) return;
+    activeTmuxSyncedRef.current = true;
+    if (activeTmuxSession) {
+      ws.switchActiveTmuxSession(activeTmuxSession, 'ui');
+    }
+  }, [ws.isConnected, ws.switchActiveTmuxSession, activeTmuxSession]);
+
+  useEffect(() => {
     if (!ws.isConnected) return;
     ws.setTTSEnabled(ttsEnabled);
   }, [ws.isConnected, ws.setTTSEnabled, ttsEnabled]);
@@ -659,6 +683,19 @@ export default function App() {
     }
     prevIsSpeakingRef.current = tts.isSpeaking;
   }, [tts.isSpeaking, playTTSStart, playTTSStop]);
+
+  useEffect(() => {
+    const unlockAudio = () => {
+      unlockDebugCues();
+      tts.unlock();
+    };
+    document.addEventListener('pointerdown', unlockAudio, true);
+    document.addEventListener('keydown', unlockAudio, true);
+    return () => {
+      document.removeEventListener('pointerdown', unlockAudio, true);
+      document.removeEventListener('keydown', unlockAudio, true);
+    };
+  }, [unlockDebugCues, tts]);
 
   // ---- Render ----
 

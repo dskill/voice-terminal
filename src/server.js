@@ -80,6 +80,7 @@ let sttReady = false;
 let sttPending = new Map();
 let tmuxStatusInterval = null;
 let lastTmuxStatusJson = '';
+let activeTmuxSessionName = '';
 
 function cloneToolCalls(toolCalls) {
   if (!Array.isArray(toolCalls)) return [];
@@ -212,6 +213,63 @@ function broadcastSessionStatus(targetClient = null) {
   broadcastToClients(payload);
 }
 
+function switchActiveSession(sessionName, source = 'api') {
+  const normalized = String(sessionName || '').trim();
+  activeTmuxSessionName = normalized;
+  broadcastToClients({
+    type: 'active-tmux-session-changed',
+    sessionName: activeTmuxSessionName,
+    source
+  });
+  return { success: true, sessionName: activeTmuxSessionName };
+}
+
+function parseControlToolCalls(text) {
+  if (typeof text !== 'string' || !text) return { cleaned: '', calls: [] };
+  const calls = [];
+
+  const lines = text.split('\n');
+  const kept = [];
+
+  for (const rawLine of lines) {
+    const trimmed = rawLine.trim();
+    if (!trimmed) {
+      kept.push(rawLine);
+      continue;
+    }
+
+    // Accept common model formatting wrappers for standalone control calls:
+    // - bullets: "- switchActiveSession(...)"
+    // - inline code: "`switchActiveSession(...)`"
+    // - trailing semicolon / period
+    let candidate = trimmed.replace(/^[-*+]\s+/, '');
+    if (candidate.startsWith('`') && candidate.endsWith('`') && candidate.length >= 2) {
+      candidate = candidate.slice(1, -1).trim();
+    }
+    candidate = candidate.replace(/[;.]$/, '').trim();
+
+    const match = candidate.match(/^switchActiveSession\(\s*(['"])(.*?)\1\s*\)$/);
+    if (match) {
+      calls.push({
+        toolName: 'switchActiveSession',
+        input: { sessionName: String(match[2] || '').trim() }
+      });
+      continue;
+    }
+
+    kept.push(rawLine);
+  }
+
+  const cleaned = kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  return { cleaned, calls };
+}
+
+function applyTmuxSessionContext(transcript) {
+  const text = String(transcript || '');
+  if (!activeTmuxSessionName) return text;
+  return `this speech command is intended for use with tmux session ${activeTmuxSessionName}\n\n${text}`;
+}
+
 function resetTurnTracking() {
   responseBuffer = '';
   currentTurnToolCalls = [];
@@ -337,7 +395,38 @@ function handleOrchestratorEvent(event) {
       return;
     }
 
-    const fullResponse = typeof event.fullResponse === 'string' ? event.fullResponse : responseBuffer;
+    const rawResponse = typeof event.fullResponse === 'string' ? event.fullResponse : responseBuffer;
+    const parsedControlCalls = parseControlToolCalls(rawResponse);
+    if (parsedControlCalls.calls.length > 0) {
+      for (const call of parsedControlCalls.calls) {
+        const timelineEvent = {
+          type: 'tool',
+          seq: ++currentTurnSeq,
+          toolName: call.toolName,
+          input: call.input
+        };
+        currentTurnToolCalls.push({ toolName: call.toolName, input: call.input });
+        appendTurnTimeline(timelineEvent);
+
+        if (inFlightTurn) {
+          inFlightTurn.toolCalls.push({ toolName: call.toolName, input: call.input });
+          inFlightTurn.timeline.push(timelineEvent);
+        }
+
+        broadcastToClients({
+          type: 'tool-call',
+          seq: timelineEvent.seq,
+          toolName: timelineEvent.toolName,
+          input: timelineEvent.input
+        });
+
+        if (call.toolName === 'switchActiveSession') {
+          switchActiveSession(call.input?.sessionName || '', 'orchestrator-tool');
+        }
+      }
+    }
+
+    const fullResponse = parsedControlCalls.cleaned;
     responseBuffer = '';
     const spokenSummary = extractSpokenSummary(fullResponse);
 
@@ -1160,6 +1249,11 @@ wss.on('connection', (ws) => {
   connectedClients.add(ws);
 
   broadcastSessionStatus(ws);
+  ws.send(JSON.stringify({
+    type: 'active-tmux-session-changed',
+    sessionName: activeTmuxSessionName,
+    source: 'server'
+  }));
   publishTmuxAgentStatus(true).catch(() => {});
 
   ws.on('message', (data) => {
@@ -1271,8 +1365,15 @@ wss.on('connection', (ws) => {
           ws.send(JSON.stringify({ type: 'error', message: result.error }));
         }
 
+      } else if (message.type === 'switch-active-tmux-session') {
+        const nextSession = String(message.sessionName || '').trim();
+        const result = switchActiveSession(nextSession, message.source || 'ui');
+        if (!result.success) {
+          ws.send(JSON.stringify({ type: 'error', message: 'Failed to switch active tmux session' }));
+        }
+
       } else if (message.type === 'voice-command') {
-        const transcript = message.transcript;
+        const transcript = applyTmuxSessionContext(message.transcript);
 
         conversationHistory.push({
           id: nextMessageId++,
