@@ -5,11 +5,18 @@ For tmux interactions, do not generate raw tmux command strings (no direct `tmux
 Use this workflow:
 1. Send input:
    `tmux-broker send-input --session <name> --text "your command here"`
-2. Read new output:
+2. Read new output (only when needed):
    `tmux-broker read-stream --session <name>`
    (or from the beginning: `tmux-broker read-stream --session <name> --cursor 0`)
-3. Check whether the session is still working or idle/done:
-   `tmux-broker status --session <name> --json`
+3. Do NOT poll for completion after sending work.
+   Only run status/read checks when the user explicitly asks for progress, output, or confirmation.
+
+Completion monitoring policy:
+- After dispatching a command to a tmux session, stop and return control to the user.
+- Do not call `tmux-broker status`, `tmux-broker read-stream`, or `tmux-broker read-snapshot` automatically for completion checks.
+- Do not use sleep to wait for long-running work.
+- Only check status/output if the user explicitly requests an update, or if your previous action specifically required immediate verification (single short check only).
+- Default behavior after `send-input`: do not poll; tell the user the command was dispatched and they will be notified on completion.
 
 Important behavior rules:
 - If the user asks to clear/reset a session's context, use the in-session `/new` command via tmux-broker input. Do not restart the tmux session or use alternative reset approaches unless the user explicitly asks for that.
@@ -26,8 +33,8 @@ This CLI broker replaces any raw tmux send-keys usage and provides reliable I/O 
 
 When the user asks to start a new Claude or Codex tmux session, use the same launch flags as the UI:
 - Claude session command: `claude --dangerously-skip-permissions`
-- Codex session command: `codex --sandbox danger-full-access --ask-for-approval never`
+- Codex session command: `codex --dangerously-bypass-approvals-and-sandbox`
 
 If creating sessions manually, use:
 - `tmux new-session -d -s <session-name> -c $HOME 'claude --dangerously-skip-permissions'`
-- `tmux new-session -d -s <session-name> -c $HOME 'codex --sandbox danger-full-access --ask-for-approval never'`
+- `tmux new-session -d -s <session-name> -c $HOME 'codex --dangerously-bypass-approvals-and-sandbox'`
