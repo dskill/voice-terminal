@@ -64,7 +64,7 @@ tmux new-session -d -s voice-terminal -c /path/to/voice-terminal '. .venv/bin/ac
 
 - **Restart** - Restart orchestrator session and reset in-memory conversation state (not a Node server restart)
 - **Refresh** - Reload the page (useful for testing changes)
-- **Cancel** - Discard current transcription without sending
+- **Cancel / mic button while processing** - If Claude is speaking, stops TTS immediately. Otherwise cancels the current transcription or in-progress request.
 - **Spacebar** - Toggle recording (desktop)
 - **Escape** - Cancel current transcription
 
@@ -74,6 +74,23 @@ tmux new-session -d -s voice-terminal -c /path/to/voice-terminal '. .venv/bin/ac
 - On reconnect/refresh, history is restored from server memory.
 - If a response is still in progress, in-flight text/tool activity resumes in the UI.
 - If spoken summary audio was missed while disconnected, it is replayed after reconnect.
+
+## Production vs Development
+
+- `npm run dev` — builds once, then watches for changes and auto-rebuilds. Use this during development.
+- `npm start` — just runs the Node server, no build step. Use this on a production instance where `dist/` is already committed and up to date.
+
+## Orchestrator System Prompt
+
+The Claude Code subprocess is launched with `--append-system-prompt-file orchestrator-system-prompt.md`. This file defines Claude's role as a voice-driven orchestrator: it instructs Claude to be concise, end responses with a `[SPOKEN: ...]` summary for TTS, and use the `tmux-broker` CLI to manage sub-agent tmux sessions rather than raw tmux commands.
+
+Edit `orchestrator-system-prompt.md` to change Claude's behavior or add context about your VM environment. A server restart is required for changes to take effect.
+
+## tmux-broker
+
+`tmux-broker` is a CLI binary included in the repo that the orchestrator uses to reliably send input to and read output from tmux sessions. It provides load-buffer/paste-buffer I/O, stream logs with cursor-based reads, and persisted session state — replacing fragile raw `tmux send-keys` usage.
+
+The server adds `tmux-broker` to `PATH` when spawning the Claude subprocess so it's available without any additional setup.
 
 ## Requirements
 
