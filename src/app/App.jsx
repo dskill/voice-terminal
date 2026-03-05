@@ -548,6 +548,15 @@ export default function App() {
     tts.stop();
   }, [ws, tts]);
 
+  const cancelMicAction = useCallback(() => {
+    if (tts.isSpeaking) {
+      tts.stop();
+      setLiveText('');
+      return;
+    }
+    cancelProcessing();
+  }, [tts, cancelProcessing]);
+
   // ---- Session controls ----
 
   const restartSession = useCallback(() => {
@@ -704,6 +713,8 @@ export default function App() {
   const activeTmuxStatus = activeTmuxSession ? tmuxStatusBySession[activeTmuxSession] : null;
   const activeStatusText = activeTmuxStatus?.state === 'working' ? 'Working' : 'Idle';
   const activeStatusDot = activeTmuxStatus?.state === 'working' ? 'bg-emerald-400' : 'bg-slate-500';
+  const isMicInCancelMode = isProcessing || tts.isSpeaking;
+  const micStatusText = tts.isSpeaking ? 'Speaking...' : liveText;
 
   return (
     <div className="h-dvh flex flex-col bg-slate-950 text-slate-100">
@@ -747,9 +758,9 @@ export default function App() {
             )}
           </div>
 
-          {liveText && !showInput && (
+          {micStatusText && !showInput && (
             <div className="text-sm text-slate-300 text-center min-h-[1.5em] px-4">
-              {liveText}
+              {micStatusText}
             </div>
           )}
 
@@ -784,11 +795,11 @@ export default function App() {
               <MicButton
                 isRecording={speech.isListening}
                 audioLevel={speech.audioLevel}
-                isProcessing={isProcessing}
+                isProcessing={isMicInCancelMode}
                 isSendMode={false}
                 disabled={!ws.sessionRunning || isTranscribing}
                 onClick={toggleRecording}
-                onCancel={cancelProcessing}
+                onCancel={cancelMicAction}
                 onLongPress={openSessionMenu}
               />
 
