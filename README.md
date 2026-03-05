@@ -12,6 +12,10 @@ Speak commands, see them transcribed, edit if needed, and hear Claude's response
 - **Text-to-speech** - Responses include a spoken summary read aloud
 - **Mobile-friendly** - Fixed bottom controls, proper viewport handling
 
+## Built Files
+
+The `dist/` folder is committed to the repo so instances can serve the app without a local build step. **Always run `npm run build` before committing front-end changes**, then include the updated `dist/` in your commit.
+
 ## Setup
 
 ```bash
