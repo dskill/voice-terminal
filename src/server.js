@@ -676,6 +676,30 @@ function createClaudeAdapter(emit, modelName) {
   }
 
   function cancel() {
+    if (!claudeProcess || !ready) {
+      return { terminated: false };
+    }
+
+    const interruptMessage = {
+      type: 'control_request',
+      request_id: `interrupt-${Date.now()}`,
+      request: { subtype: 'interrupt' }
+    };
+
+    try {
+      claudeProcess.stdin.write(`${JSON.stringify(interruptMessage)}\n`);
+      return { terminated: true };
+    } catch (err) {
+      console.warn(`Failed to send Claude interrupt control request: ${err.message}`);
+    }
+
+    try {
+      claudeProcess.kill('SIGINT');
+      return { terminated: true };
+    } catch (err) {
+      console.warn(`Failed to send SIGINT to Claude process: ${err.message}`);
+    }
+
     return { terminated: false };
   }
 
