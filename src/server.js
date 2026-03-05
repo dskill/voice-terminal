@@ -37,8 +37,9 @@ const SUPPORTED_ORCHESTRATORS = Object.keys(ORCHESTRATOR_CONFIG);
 
 function normalizeOrchestratorKind(kind) {
   if (kind === 'codex') return 'codex';
+  if (kind === 'claude') return 'claude';
   if (kind === 'claude-sonnet-4-6') return 'claude-sonnet-4-6';
-  return 'claude-sonnet-4-6';
+  return 'claude';
 }
 
 function orchestratorLabel(kind) {

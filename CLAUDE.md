@@ -72,6 +72,14 @@ You are being controlled via a voice interface. Be concise. After completing req
 - Proper flexbox layout for mobile (100dvh, controls don't overlap history)
 - Restart and refresh buttons for testing
 
+## Launching Codex Sessions
+
+Always start Codex with `--model gpt-5.4` to ensure the latest model is used:
+
+```bash
+tmux new-session -d -s <session-name> -c /home/exedev/voice-terminal 'codex --dangerously-bypass-approvals-and-sandbox --model gpt-5.4'
+```
+
 ## Known Issues / TODOs
 
 - History can still get covered by input area when typing long messages

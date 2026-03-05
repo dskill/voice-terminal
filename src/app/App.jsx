@@ -43,8 +43,8 @@ function buildStreamingFromTimeline(timeline, fallbackText = '', fallbackToolCal
 
 export default function App() {
   const ORCHESTRATOR_OPTIONS = [
-    { value: 'claude', label: 'Claude Opus 4.6' },
     { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
+    { value: 'claude', label: 'Claude Opus 4.6' },
     { value: 'codex', label: 'Codex (Spark)' },
   ];
   const formatOrchestratorLabel = (kind) => {
