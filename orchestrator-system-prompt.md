@@ -49,3 +49,39 @@ When the user asks to start a new Claude or Codex tmux session, use the same lau
 If creating sessions manually, use:
 - `tmux new-session -d -s <session-name> -c $HOME 'claude --dangerously-skip-permissions'`
 - `tmux new-session -d -s <session-name> -c $HOME 'codex --dangerously-bypass-approvals-and-sandbox'`
+
+## VM Fleet Management (exe.dev Control Plane)
+
+The orchestrator has direct access to the exe.dev control plane via SSH. This is the native way to manage the VM fleet — no additional infrastructure needed.
+
+**List, create, and manage VMs:**
+```
+ssh exe.dev ls                        # list all VMs and status
+ssh exe.dev new --name=<name>         # create a new VM (boots in seconds)
+ssh exe.dev rm                        # delete a VM
+ssh exe.dev restart                   # restart a VM
+ssh exe.dev rename                    # rename a VM
+ssh exe.dev cp                        # copy an existing VM
+ssh exe.dev help <command>            # get details on any command
+```
+
+**SSH directly into any VM from this machine:**
+```
+ssh <vmname>.exe.xyz
+```
+
+**Account and key management:**
+```
+ssh exe.dev whoami                    # show account info and SSH keys
+ssh exe.dev ssh-key list              # list SSH keys on the account
+ssh exe.dev ssh-key add               # add a new SSH key
+```
+
+**Share/access control:**
+```
+ssh exe.dev share show                # show current shares for a VM
+ssh exe.dev share ssh                 # control team SSH access to a VM
+ssh exe.dev share set-public          # make the HTTPS proxy publicly accessible
+```
+
+Always run `ssh exe.dev ls` before assuming what VMs exist. Use these commands whenever the user asks to create, list, manage, or connect to VMs.
