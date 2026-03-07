@@ -1,13 +1,14 @@
 import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
 import express from 'express';
+import formidable from 'formidable';
 import { spawn, execFile } from 'child_process';
 import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
-import { existsSync, writeFileSync, unlinkSync } from 'fs';
+import { basename, dirname, join } from 'path';
+import { existsSync, mkdirSync, renameSync, writeFileSync, unlinkSync } from 'fs';
 import { createInterface } from 'readline';
-import { tmpdir } from 'os';
+import { homedir, tmpdir } from 'os';
 import { loadTTSModel, isTTSReady, synthesizeStream } from './tts.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -52,6 +53,7 @@ const distPath = join(__dirname, '../dist');
 const publicPath = join(__dirname, '../public');
 const systemPromptPath = join(__dirname, '../orchestrator-system-prompt.md');
 const staticPath = existsSync(distPath) ? distPath : publicPath;
+const uploadsDir = join(homedir(), 'voice-terminal', 'uploads');
 console.log(`Serving static files from: ${staticPath}`);
 app.use(express.static(staticPath));
 
@@ -1053,6 +1055,28 @@ function sendToOrchestrator(userMessage) {
   return { success: true };
 }
 
+function dispatchUserMessage(userMessage) {
+  const content = String(userMessage || '').trim();
+  if (!content) {
+    return { error: 'Missing message content' };
+  }
+
+  conversationHistory.push({
+    id: nextMessageId++,
+    type: 'user',
+    content,
+    timestamp: Date.now()
+  });
+
+  const result = sendToOrchestrator(content);
+  if (result?.error) {
+    conversationHistory.pop();
+    return result;
+  }
+
+  return { success: true };
+}
+
 function interruptSession() {
   if (!orchestrator || !orchestrator.isReady()) {
     return { success: false };
@@ -1119,6 +1143,56 @@ function markMessageSpeechDelivered(messageId) {
     msg.spokenDelivered = true;
   }
 }
+
+function parseMultipartForm(req) {
+  const form = formidable({
+    multiples: false,
+    uploadDir: tmpdir(),
+    keepExtensions: true
+  });
+
+  return form.parse(req);
+}
+
+app.post('/upload', async (req, res) => {
+  try {
+    const [, files] = await parseMultipartForm(req);
+    const uploadedValue = files.file;
+    const uploadedFile = Array.isArray(uploadedValue) ? uploadedValue[0] : uploadedValue;
+
+    if (!uploadedFile?.filepath) {
+      res.status(400).json({ success: false, error: 'Missing uploaded file' });
+      return;
+    }
+
+    mkdirSync(uploadsDir, { recursive: true });
+
+    const originalName = basename(String(uploadedFile.originalFilename || 'upload.bin')) || 'upload.bin';
+    const filename = `${Date.now()}-${originalName}`;
+    const absolutePath = join(uploadsDir, filename);
+    const displayPath = `~/voice-terminal/uploads/${filename}`;
+
+    renameSync(uploadedFile.filepath, absolutePath);
+
+    const injectedMessage = `📎 User uploaded a file: ${displayPath}`;
+    const result = dispatchUserMessage(injectedMessage);
+    if (result?.error) {
+      res.status(409).json({ success: false, error: result.error });
+      return;
+    }
+
+    res.json({
+      success: true,
+      filename,
+      path: displayPath
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      error: err.message || 'Upload failed'
+    });
+  }
+});
 
 function removeClientFromTTSStreams(client, reason = 'client-disconnected') {
   for (const [requestId, active] of activeTTSStreams.entries()) {
@@ -1586,7 +1660,6 @@ wss.on('connection', (ws) => {
           return;
         }
 
-        ws.send(JSON.stringify({ type: 'status', message: 'Processing...' }));
 
         const result = sendToOrchestrator(transcript);
         if (result.error) {

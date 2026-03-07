@@ -87,6 +87,7 @@ export default function App() {
   const tmuxStatusBaselineReadyRef = useRef(false);
   const doneFlashTimerRef = useRef(null);
   const activeTmuxSyncedRef = useRef(false);
+  const fileInputRef = useRef(null);
 
   const ws = useWebSocket();
   const speech = useSpeechRecognition();
@@ -146,13 +147,11 @@ export default function App() {
 
     ws.setHandler('session-init', (data) => {
       const label = formatOrchestratorLabel(data?.orchestrator || ws.orchestrator);
-      addMessage('status', `${label} session started`);
     });
 
     ws.setHandler('session-reinit', (data) => {
       const label = formatOrchestratorLabel(data?.orchestrator || ws.orchestrator);
       const model = data?.model ? ` (${data.model})` : '';
-      addMessage('status', `${label} session ready${model}`);
     });
 
     ws.setHandler('session-ended', (data) => {
@@ -630,6 +629,24 @@ export default function App() {
     cancelProcessing();
   }, [tts, cancelProcessing, ws]);
 
+  const handleFileChange = useCallback(async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const response = await fetch('/upload', { method: 'POST', body: formData });
+      const result = await response.json();
+      if (!response.ok || !result.success) throw new Error(result.error || 'Upload failed');
+      setLiveText(`Uploaded: ${file.name}`);
+      setTimeout(() => setLiveText(''), 2000);
+    } catch (err) {
+      setLiveText(`Upload error: ${err.message || 'Upload failed'}`);
+      setTimeout(() => setLiveText(''), 3000);
+    }
+  }, []);
+
   // ---- Session controls ----
 
   const restartSession = useCallback(() => {
@@ -877,51 +894,72 @@ export default function App() {
             visible={showInput}
           />
 
-          {!showInput && (
-            <div ref={recordingControlsRef} className="flex items-center gap-4">
-              <button
-                onPointerDown={(e) => {
-                  e.preventDefault();
-                  openSessionMenu();
-                }}
-                className="relative w-12 h-12 rounded-full flex items-center justify-center bg-slate-900 border border-slate-700 text-slate-200 hover:bg-slate-800 transition-colors touch-none select-none"
-                title="Open tmux session selector"
-              >
-                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zm0 2v10h16V7H4zm2 2h6v2H6V9zm0 4h9v2H6v-2z" />
-                </svg>
-                {totalUnreadCompletions > 0 && (
-                  <span className="absolute -top-1 -right-1 min-w-[1.1rem] h-[1.1rem] px-1 rounded-full bg-cyan-500 text-[10px] leading-[1.1rem] text-white font-semibold text-center">
-                    {totalUnreadCompletions > 9 ? '9+' : totalUnreadCompletions}
-                  </span>
-                )}
-              </button>
+          <input
+            ref={fileInputRef}
+            id="file-upload-input"
+            type="file"
+            accept="image/*,video/*,application/pdf"
+            onChange={handleFileChange}
+            className="hidden"
+          />
 
-              <MicButton
-                isRecording={speech.isListening}
-                audioLevel={speech.audioLevel}
-                isProcessing={isMicInCancelMode}
-                isSendMode={false}
-                disabled={!ws.sessionRunning || isTranscribing}
-                onClick={toggleRecording}
-                onCancel={cancelMicAction}
-                onLongPress={openSessionMenu}
-              />
+          <div className="flex items-center gap-4">
+            {!showInput && (
+              <div ref={recordingControlsRef} className="flex items-center gap-4">
+                <button
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                    openSessionMenu();
+                  }}
+                  className="relative w-12 h-12 rounded-full flex items-center justify-center bg-slate-900 border border-slate-700 text-slate-200 hover:bg-slate-800 transition-colors touch-none select-none"
+                  title="Open tmux session selector"
+                >
+                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zm0 2v10h16V7H4zm2 2h6v2H6V9zm0 4h9v2H6v-2z" />
+                  </svg>
+                  {totalUnreadCompletions > 0 && (
+                    <span className="absolute -top-1 -right-1 min-w-[1.1rem] h-[1.1rem] px-1 rounded-full bg-cyan-500 text-[10px] leading-[1.1rem] text-white font-semibold text-center">
+                      {totalUnreadCompletions > 9 ? '9+' : totalUnreadCompletions}
+                    </span>
+                  )}
+                </button>
 
-              <button
-                onPointerDown={(e) => {
-                  e.preventDefault();
-                  openKeyboardInput();
-                }}
-                className="w-12 h-12 rounded-full flex items-center justify-center bg-slate-900 border border-slate-700 text-slate-200 hover:bg-slate-800 transition-colors touch-none select-none"
-                title="Type input"
-              >
-                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M3 6h18a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2zm0 2v8h18V8H3zm2 2h2v2H5v-2zm3 0h2v2H8v-2zm3 0h2v2h-2v-2zm3 0h2v2h-2v-2zm3 0h2v2h-2v-2zM5 13h10v2H5v-2z" />
-                </svg>
-              </button>
-            </div>
-          )}
+                <MicButton
+                  isRecording={speech.isListening}
+                  audioLevel={speech.audioLevel}
+                  isProcessing={isMicInCancelMode}
+                  isSendMode={false}
+                  disabled={!ws.sessionRunning || isTranscribing}
+                  onClick={toggleRecording}
+                  onCancel={cancelMicAction}
+                  onLongPress={openSessionMenu}
+                />
+
+                <button
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                    openKeyboardInput();
+                  }}
+                  className="w-12 h-12 rounded-full flex items-center justify-center bg-slate-900 border border-slate-700 text-slate-200 hover:bg-slate-800 transition-colors touch-none select-none"
+                  title="Type input"
+                >
+                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M3 6h18a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2zm0 2v8h18V8H3zm2 2h2v2H5v-2zm3 0h2v2H8v-2zm3 0h2v2h-2v-2zm3 0h2v2h-2v-2zm3 0h2v2h-2v-2zM5 13h10v2H5v-2z" />
+                  </svg>
+                </button>
+              </div>
+            )}
+
+            <label
+              htmlFor="file-upload-input"
+              className="w-12 h-12 rounded-full flex items-center justify-center bg-slate-900 border border-slate-700 text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer select-none"
+              title="Upload file"
+            >
+              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.9-9.9a4 4 0 1 1 5.66 5.66l-9.2 9.2a2 2 0 1 1-2.83-2.83l8.49-8.48" />
+              </svg>
+            </label>
+          </div>
         </div>
       </div>
 
