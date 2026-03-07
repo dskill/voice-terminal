@@ -237,6 +237,15 @@ function broadcastSessionStatus(targetClient = null) {
   broadcastToClients(payload);
 }
 
+function sendTTSEnabledState(client, source = 'server') {
+  if (!client || client.readyState !== 1) return;
+  client.send(JSON.stringify({
+    type: 'tts-enabled-state',
+    enabled: client.ttsEnabled !== false,
+    source
+  }));
+}
+
 function switchActiveSession(sessionName, source = 'api') {
   const normalized = String(sessionName || '').trim();
   activeTmuxSessionName = normalized;
@@ -496,13 +505,22 @@ function handleOrchestratorEvent(event) {
     currentTurnSeq = 0;
     inFlightTurn = null;
 
-    const ttsScheduled = Boolean(spokenSummary && isTTSReady() && getTTSEnabledClients().length > 0);
+    let ttsSkipReason = null;
+    if (!spokenSummary) {
+      ttsSkipReason = 'no-spoken-summary';
+    } else if (!isTTSReady()) {
+      ttsSkipReason = 'tts-not-ready';
+    } else if (getTTSEnabledClients().length === 0) {
+      ttsSkipReason = 'no-tts-enabled-clients';
+    }
+    const ttsScheduled = ttsSkipReason == null;
 
     broadcastToClients({
       type: 'response',
       fullResponse,
       spokenSummary,
       ttsScheduled,
+      ttsSkipReason,
       toolCalls: assistantMessage.toolCalls,
       timeline: assistantMessage.timeline,
       model: sessionMetadata.model,
@@ -1423,6 +1441,7 @@ wss.on('connection', (ws) => {
     sessionName: activeTmuxSessionName,
     source: 'server'
   }));
+  sendTTSEnabledState(ws, 'server-init');
   publishTmuxAgentStatus(true).catch(() => {});
 
   ws.on('message', (data) => {
@@ -1494,6 +1513,7 @@ wss.on('connection', (ws) => {
         if (!ws.ttsEnabled) {
           stopTTSForClient(ws, 'tts-disabled');
         }
+        sendTTSEnabledState(ws, 'server-ack');
 
       } else if (message.type === 'list-tmux-sessions') {
         listTmuxSessions()

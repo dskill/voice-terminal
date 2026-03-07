@@ -77,10 +77,37 @@ sudo rm /usr/local/bin/codex
 sudo npm install -g @openai/codex
 ```
 
-## 6. Start the Voice Terminal
+## 6. Set Up Piper TTS
+
+Piper TTS is disabled unless `PIPER_MODEL` points to a local `.onnx` voice model. The recommended model is `en_US-lessac-medium`.
+
+### Option A: Copy from an existing VM (fastest)
 
 ```bash
-tmux new-session -d -s voice-terminal -c ~/voice-terminal '. .venv/bin/activate && npm start'
+# Run from the source VM
+ssh <newvm>.exe.xyz 'mkdir -p ~/voice-terminal/models/piper'
+scp ~/voice-terminal/models/piper/en_US-lessac-medium.onnx <newvm>.exe.xyz:~/voice-terminal/models/piper/
+scp ~/voice-terminal/models/piper/en_US-lessac-medium.onnx.json <newvm>.exe.xyz:~/voice-terminal/models/piper/
+```
+
+### Option B: Download from Hugging Face
+
+```bash
+mkdir -p ~/voice-terminal/models/piper
+cd ~/voice-terminal/models/piper
+wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx
+wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json
+```
+
+## 7. Start the Voice Terminal
+
+Start with `PIPER_MODEL` and `PIPER_MODEL_CONFIG` set so TTS is enabled:
+
+```bash
+tmux new-session -d -s voice-terminal -c ~/voice-terminal \
+  'PIPER_MODEL=$HOME/voice-terminal/models/piper/en_US-lessac-medium.onnx \
+   PIPER_MODEL_CONFIG=$HOME/voice-terminal/models/piper/en_US-lessac-medium.onnx.json \
+   . .venv/bin/activate && npm start'
 ```
 
 Access at `https://your-vm.exe.xyz:3456/`

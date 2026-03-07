@@ -5,10 +5,12 @@ export default function useWebSocket() {
   const [sessionRunning, setSessionRunning] = useState(false);
   const [orchestrator, setOrchestrator] = useState('claude-sonnet-4-6');
   const [supportedOrchestrators, setSupportedOrchestrators] = useState(['claude', 'claude-sonnet-4-6', 'codex']);
+  const [serverTTSEnabled, setServerTTSEnabled] = useState(true);
   const wsRef = useRef(null);
   const handlersRef = useRef({});
   const reconnectTimer = useRef(null);
   const sttPendingRef = useRef(new Map());
+  const desiredTTSEnabledRef = useRef(null);
 
   const setHandler = useCallback((type, handler) => {
     handlersRef.current[type] = handler;
@@ -33,6 +35,9 @@ export default function useWebSocket() {
         setIsConnected(true);
         send('get-orchestrator');
         send('get-history');
+        if (desiredTTSEnabledRef.current != null) {
+          send('set-tts-enabled', { enabled: !!desiredTTSEnabledRef.current });
+        }
       };
 
       ws.onclose = () => {
@@ -60,6 +65,8 @@ export default function useWebSocket() {
           if (Array.isArray(data.supportedOrchestrators) && data.supportedOrchestrators.length > 0) {
             setSupportedOrchestrators(data.supportedOrchestrators);
           }
+        } else if (data.type === 'tts-enabled-state') {
+          setServerTTSEnabled(data.enabled !== false);
         } else if (data.type === 'session-init') {
           setSessionRunning(true);
           if (data.orchestrator) setOrchestrator(data.orchestrator);
@@ -155,13 +162,18 @@ export default function useWebSocket() {
   const switchActiveTmuxSession = useCallback((sessionName, source = 'ui') => {
     return send('switch-active-tmux-session', { sessionName: sessionName || '', source });
   }, [send]);
-  const setTTSEnabled = useCallback((enabled) => send('set-tts-enabled', { enabled: !!enabled }), [send]);
+  const setTTSEnabled = useCallback((enabled) => {
+    const value = !!enabled;
+    desiredTTSEnabledRef.current = value;
+    return send('set-tts-enabled', { enabled: value });
+  }, [send]);
 
   return {
     isConnected,
     sessionRunning,
     orchestrator,
     supportedOrchestrators,
+    serverTTSEnabled,
     send,
     setHandler,
     startSession,

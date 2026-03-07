@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 
 let cueContext = null;
 
@@ -70,6 +70,8 @@ function playTone({
 }
 
 export default function useDebugAudioCues() {
+  const lastStreamChunkCueAtRef = useRef(0);
+
   const unlock = useCallback(async () => {
     try {
       const ctx = getCueContext();
@@ -111,6 +113,20 @@ export default function useDebugAudioCues() {
     }
   }, []);
 
+  const playToolDispatch = useCallback(() => {
+    // Tiny click-like tick to indicate tool dispatch.
+    playTone({ startFreq: 1620, endFreq: 1340, type: 'square', duration: 0.035, volume: 0.08, attack: 0.001, release: 0.035 });
+  }, []);
+
+  const playStreamChunk = useCallback(() => {
+    // Rate-limit chunk cues so streaming text doesn't become noisy.
+    const nowMs = Date.now();
+    if ((nowMs - lastStreamChunkCueAtRef.current) < 180) return;
+    lastStreamChunkCueAtRef.current = nowMs;
+    // Soft, brief blip.
+    playTone({ startFreq: 980, endFreq: 1080, type: 'sine', duration: 0.03, volume: 0.035, attack: 0.002, release: 0.03, warm: true });
+  }, []);
+
   return {
     unlock,
     playMicStart,
@@ -118,5 +134,7 @@ export default function useDebugAudioCues() {
     playTTSStart,
     playTTSStop,
     playSessionComplete,
+    playToolDispatch,
+    playStreamChunk,
   };
 }

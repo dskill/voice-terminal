@@ -98,6 +98,8 @@ export default function App() {
     playTTSStart,
     playTTSStop,
     playSessionComplete,
+    playToolDispatch,
+    playStreamChunk,
   } = useDebugAudioCues();
   const ttsChunkMetaRef = useRef(null);
   const prevIsSpeakingRef = useRef(false);
@@ -257,6 +259,7 @@ export default function App() {
     });
 
     ws.setHandler('tool-call', (data) => {
+      playToolDispatch();
       setStreamingMessage((prev) => {
         const current = prev || { text: '', toolCalls: [], timeline: [] };
         const timeline = appendTimelineEvent(current.timeline, {
@@ -271,6 +274,9 @@ export default function App() {
     });
 
     ws.setHandler('partial', (data) => {
+      if ((data.text || '').trim()) {
+        playStreamChunk();
+      }
       setStreamingMessage((prev) => {
         const current = prev || { text: '', toolCalls: [], timeline: [] };
         const timeline = appendTimelineEvent(current.timeline, {
@@ -295,6 +301,16 @@ export default function App() {
       if (data.ttsScheduled) {
         setLiveText('Generating speech...');
       } else {
+        if (data.ttsSkipReason) {
+          console.warn(`[TTS] Not scheduled: ${data.ttsSkipReason}`);
+        }
+        if (ttsEnabled && data.ttsSkipReason === 'no-tts-enabled-clients') {
+          ws.setTTSEnabled(true);
+          setLiveText('Resyncing audio with server...');
+          setTimeout(() => setLiveText(''), 1200);
+          setIsProcessing(false);
+          return;
+        }
         setLiveText('');
         setIsProcessing(false);
       }
@@ -397,7 +413,11 @@ export default function App() {
     activeTmuxSession,
     ws.orchestrator,
     tmuxStatusBySession,
-    playSessionComplete
+    ws.setTTSEnabled,
+    playSessionComplete,
+    playToolDispatch,
+    playStreamChunk,
+    ttsEnabled
   ]);
 
   const requestWakeLock = useCallback(async () => {
@@ -830,6 +850,18 @@ export default function App() {
               </span>
             )}
           </div>
+
+          {ttsEnabled && ws.serverTTSEnabled === false && (
+            <div className="text-[11px] text-rose-300 text-center">
+              Server audio state is OFF (resync pending)
+            </div>
+          )}
+
+          {ttsEnabled && tts.audioIssue && (
+            <div className="text-[11px] text-amber-300 text-center max-w-lg px-2">
+              Audio issue: {tts.audioIssue}
+            </div>
+          )}
 
           {micStatusText && !showInput && (
             <div className="text-sm text-slate-300 text-center min-h-[1.5em] px-4">

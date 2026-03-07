@@ -20,12 +20,14 @@ function pcm16ToFloat32(arrayBuffer) {
 export default function useTTS() {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [audioContextState, setAudioContextState] = useState(audioCtx ? audioCtx.state : 'uninitialized');
+  const [audioIssue, setAudioIssue] = useState('');
   const requestIdRef = useRef(null);
   const sampleRateRef = useRef(22050);
   const nextStartTimeRef = useRef(0);
   const streamOpenRef = useRef(false);
   const scheduledSourcesRef = useRef(new Set());
   const stateListenerAttachedRef = useRef(false);
+  const playedChunkInStreamRef = useRef(false);
 
   const bindContextStateListener = useCallback((ctx) => {
     if (!ctx || stateListenerAttachedRef.current) return;
@@ -35,6 +37,9 @@ export default function useTTS() {
     ctx.addEventListener('statechange', () => {
       console.log(`[TTS] AudioContext state changed: ${ctx.state}`);
       setAudioContextState(ctx.state);
+      if (ctx.state !== 'running') {
+        setAudioIssue(`AudioContext is ${ctx.state}`);
+      }
     });
   }, []);
 
@@ -66,6 +71,9 @@ export default function useTTS() {
   const unlock = useCallback(async () => {
     try {
       const ctx = await ensureAudioContextRunning('unlock');
+      if (ctx.state === 'running') {
+        setAudioIssue('');
+      }
       return ctx.state === 'running';
     } catch (e) { /* ignore */ }
     return false;
@@ -102,10 +110,12 @@ export default function useTTS() {
     requestIdRef.current = nextRequestId;
     sampleRateRef.current = Number(meta.sampleRate) || 22050;
     streamOpenRef.current = true;
+    playedChunkInStreamRef.current = false;
 
     const ctx = getOrCreateContext('startStream');
     if (ctx.state !== 'running') {
       ensureAudioContextRunning('startStream').catch(() => {});
+      setAudioIssue(`AudioContext is ${ctx.state}; tap "enable audio"`);
     }
     nextStartTimeRef.current = Math.max(nextStartTimeRef.current, ctx.currentTime + 0.05);
     setIsSpeaking(true);
@@ -120,6 +130,7 @@ export default function useTTS() {
       const ctx = getOrCreateContext('enqueueChunk');
       if (ctx.state !== 'running') {
         console.warn(`[TTS] Skipping chunk playback because AudioContext is ${ctx.state}`);
+        setAudioIssue(`Skipped audio chunk (${ctx.state})`);
         return;
       }
 
@@ -144,9 +155,12 @@ export default function useTTS() {
 
       scheduledSourcesRef.current.add(source);
       setIsSpeaking(true);
+      playedChunkInStreamRef.current = true;
+      setAudioIssue('');
       source.start(startTime);
     } catch (e) {
       console.error('[TTS] Playback error:', e);
+      setAudioIssue(`Playback error: ${e?.message || 'unknown'}`);
       stop();
     }
   }, [clearSpeakingIfIdle, stop, getOrCreateContext]);
@@ -154,6 +168,9 @@ export default function useTTS() {
   const endStream = useCallback((requestId) => {
     if (!requestId || requestId !== requestIdRef.current) return;
     streamOpenRef.current = false;
+    if (!playedChunkInStreamRef.current) {
+      setAudioIssue('No audio frames played for latest response');
+    }
     clearSpeakingIfIdle();
   }, [clearSpeakingIfIdle]);
 
@@ -161,6 +178,7 @@ export default function useTTS() {
     try {
       const ctx = await ensureAudioContextRunning();
       if (ctx.state !== 'running') {
+        setAudioIssue(`AudioContext is ${ctx.state}`);
         return false;
       }
 
@@ -190,9 +208,11 @@ export default function useTTS() {
           gain.disconnect();
         } catch (e) { /* ignore */ }
       };
+      setAudioIssue('');
       return true;
     } catch (e) {
       console.warn('[TTS] Failed to play enable cue:', e);
+      setAudioIssue(`Enable cue failed: ${e?.message || 'unknown'}`);
       return false;
     }
   }, [ensureAudioContextRunning]);
@@ -201,6 +221,7 @@ export default function useTTS() {
     isSpeaking,
     audioContextState,
     isAudioUnlocked: audioContextState === 'running',
+    audioIssue,
     unlock,
     startStream,
     enqueueChunk,
