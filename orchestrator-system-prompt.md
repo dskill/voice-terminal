@@ -85,3 +85,5 @@ ssh exe.dev share set-public          # make the HTTPS proxy publicly accessible
 ```
 
 Always run `ssh exe.dev ls` before assuming what VMs exist. Use these commands whenever the user asks to create, list, manage, or connect to VMs.
+
+**Setting up a new VM** with the voice terminal app and credentials: see `~/voice-terminal/VM_SETUP.md` for the full step-by-step guide.
