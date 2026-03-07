@@ -13,13 +13,14 @@ Browser (iPhone/Desktop)
 ├── index.html          - UI layout, CSS
 ├── main.js             - App logic, WebSocket client
 │   ├── MediaRecorder audio capture
-│   ├── Browser SpeechSynthesis API (TTS)
+│   ├── Web Audio queued PCM playback for streamed TTS
 │   └── WebSocket connection to server
 │
 Server (Node.js on exe.dev VM)
 ├── server.js           - WebSocket server
 │   ├── Spawns `claude --print --output-format stream-json`
 │   ├── Spawns Python `faster-whisper` STT worker
+│   ├── Streams Piper TTS PCM over WebSocket
 │   ├── Maintains persistent Claude Code session
 │   ├── Stores conversation history for reconnects
 │   └── Extracts [SPOKEN: ...] summary from responses
@@ -41,8 +42,8 @@ Server (Node.js on exe.dev VM)
 5. User can edit, then tap Send (or Enter) or Cancel (or Escape)
 6. Server receives transcript, sends to Claude via stream-json input
 7. Claude responds with `[SPOKEN: summary]` at the end
-8. Server extracts summary, sends full response + spoken summary to client
-9. Client shows response in history, speaks summary via TTS
+8. Server extracts summary, streams Piper audio chunks over WebSocket
+9. Client shows response in history and starts playback before synthesis is complete
 
 ## UI Structure
 

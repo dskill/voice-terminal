@@ -9,7 +9,7 @@ Speak commands, see them transcribed, edit if needed, and hear Claude's response
 - **Tap-to-talk voice input** - Browser audio capture with server-side `faster-whisper` STT
 - **Edit before send** - Review and edit transcription before sending to Claude
 - **Persistent sessions** - Claude Code session survives page refreshes/reconnects
-- **Text-to-speech** - Responses include a spoken summary read aloud
+- **Text-to-speech** - Responses include a spoken summary streamed from Piper over WebSocket
 - **Mobile-friendly** - Fixed bottom controls, proper viewport handling
 
 ## Built Files
@@ -32,6 +32,26 @@ tmux new-session -d -s voice-terminal -c /path/to/voice-terminal '. .venv/bin/ac
 To view logs: `tmux attach -t voice-terminal`
 
 Access at `https://your-vm.exe.xyz:3456/`
+
+### Piper TTS setup
+
+Server-side TTS is disabled unless `PIPER_MODEL` points to a local Piper `.onnx` voice model.
+
+Optional env vars:
+- `PIPER_BIN` - Piper executable name or absolute path (default: `piper`)
+- `PIPER_MODEL` - Path to the Piper `.onnx` model file
+- `PIPER_MODEL_CONFIG` - Optional path to the matching model config JSON
+- `PIPER_SPEAKER` - Optional speaker id for multi-speaker models
+- `PIPER_SAMPLE_RATE` - Override sample rate if config parsing is unavailable
+- `TTS_MAX_CHUNK_LENGTH` - Max text chunk length before the server splits long summaries for streaming
+
+Example:
+
+```bash
+export PIPER_MODEL=$HOME/models/en_US-amy-medium.onnx
+export PIPER_MODEL_CONFIG=$HOME/models/en_US-amy-medium.onnx.json
+npm start
+```
 
 ## Restarting
 
@@ -98,6 +118,7 @@ The server adds `tmux-broker` to `PATH` when spawning the Claude subprocess so i
 - Python 3.9+
 - `venv` module available (`python3 -m venv`)
 - Claude Code CLI installed and authenticated
+- Piper installed locally if you want spoken output
 - Modern browser with `MediaRecorder` support
 
 ## Server STT

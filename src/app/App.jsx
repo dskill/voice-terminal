@@ -99,7 +99,7 @@ export default function App() {
     playTTSStop,
     playSessionComplete,
   } = useDebugAudioCues();
-  const ttsMetaRef = useRef(null);
+  const ttsChunkMetaRef = useRef(null);
   const prevIsSpeakingRef = useRef(false);
   const wakeLockRef = useRef(null);
   const recordingControlsRef = useRef(null);
@@ -292,7 +292,7 @@ export default function App() {
         return null;
       });
 
-      if (data.spokenSummary) {
+      if (data.ttsScheduled) {
         setLiveText('Generating speech...');
       } else {
         setLiveText('');
@@ -300,22 +300,44 @@ export default function App() {
       }
     });
 
-    ws.setHandler('tts-audio', (data) => {
-      ttsMetaRef.current = { samplingRate: data.samplingRate, numSamples: data.numSamples };
+    ws.setHandler('tts-start', (data) => {
+      tts.startStream(data);
+      setLiveText('Speaking...');
+    });
+
+    ws.setHandler('tts-chunk', (data) => {
+      ttsChunkMetaRef.current = {
+        requestId: data.requestId,
+        sampleRate: data.sampleRate,
+      };
     });
 
     ws.setHandler('tts-audio-data', (arrayBuffer) => {
-      const meta = ttsMetaRef.current;
+      const meta = ttsChunkMetaRef.current;
       if (!meta) return;
-      const float32 = new Float32Array(arrayBuffer);
-      tts.playAudio(float32, meta.samplingRate);
-      ttsMetaRef.current = null;
+      tts.enqueueChunk(arrayBuffer, meta);
+      ttsChunkMetaRef.current = null;
+      setLiveText('Speaking...');
+      setIsProcessing(false);
+    });
+
+    ws.setHandler('tts-end', (data) => {
+      tts.endStream(data.requestId);
+      setLiveText('');
+      setIsProcessing(false);
+    });
+
+    ws.setHandler('tts-cancelled', (data) => {
+      tts.stop();
+      ttsChunkMetaRef.current = null;
       setLiveText('');
       setIsProcessing(false);
     });
 
     ws.setHandler('tts-error', (data) => {
       console.warn('[TTS] Server error:', data.message);
+      tts.stop();
+      ttsChunkMetaRef.current = null;
       setLiveText('');
       setIsProcessing(false);
     });
@@ -328,6 +350,8 @@ export default function App() {
     });
 
     ws.setHandler('request-cancelled', (data) => {
+      tts.stop();
+      ttsChunkMetaRef.current = null;
       setStreamingMessage((prev) => {
         const timeline = (Array.isArray(data?.timeline) && data.timeline.length > 0)
           ? data.timeline
@@ -361,7 +385,20 @@ export default function App() {
     ws.setHandler('history-cleared', () => {
       // handled by local state clear
     });
-  }, [ws.setHandler, ws.listTmuxSessions, ws.switchActiveTmuxSession, addMessage, tts.playAudio, activeTmuxSession, ws.orchestrator, tmuxStatusBySession, playSessionComplete]);
+  }, [
+    ws.setHandler,
+    ws.listTmuxSessions,
+    ws.switchActiveTmuxSession,
+    addMessage,
+    tts.startStream,
+    tts.enqueueChunk,
+    tts.endStream,
+    tts.stop,
+    activeTmuxSession,
+    ws.orchestrator,
+    tmuxStatusBySession,
+    playSessionComplete
+  ]);
 
   const requestWakeLock = useCallback(async () => {
     if (!('wakeLock' in navigator)) return;
@@ -533,9 +570,10 @@ export default function App() {
     setTTSEnabled(value);
     localStorage.setItem('voice-terminal-tts-enabled', value ? '1' : '0');
     if (!value) {
+      ws.stopTTS();
       tts.stop();
     }
-  }, [tts]);
+  }, [tts, ws]);
 
   const cancelMessage = useCallback(() => {
     setShowInput(false);
@@ -550,12 +588,13 @@ export default function App() {
 
   const cancelMicAction = useCallback(() => {
     if (tts.isSpeaking) {
+      ws.stopTTS();
       tts.stop();
       setLiveText('');
       return;
     }
     cancelProcessing();
-  }, [tts, cancelProcessing]);
+  }, [tts, cancelProcessing, ws]);
 
   // ---- Session controls ----
 

@@ -146,6 +146,7 @@ export default function useWebSocket() {
   }, [send]);
 
   const cancelRequest = useCallback(() => send('cancel-request'), [send]);
+  const stopTTS = useCallback(() => send('stop-tts'), [send]);
   const clearHistory = useCallback(() => send('clear-history'), [send]);
   const getHistory = useCallback(() => send('get-history'), [send]);
   const listTmuxSessions = useCallback(() => send('list-tmux-sessions'), [send]);
@@ -170,6 +171,7 @@ export default function useWebSocket() {
     sendCommand,
     sendAudioForSTT,
     cancelRequest,
+    stopTTS,
     clearHistory,
     getHistory,
     listTmuxSessions,

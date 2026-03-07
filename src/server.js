@@ -2,12 +2,13 @@ import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
 import express from 'express';
 import { spawn, execFile } from 'child_process';
+import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync, writeFileSync, unlinkSync } from 'fs';
 import { createInterface } from 'readline';
 import { tmpdir } from 'os';
-import { loadTTSModel, isTTSReady, synthesize } from './tts.js';
+import { loadTTSModel, isTTSReady, synthesizeStream } from './tts.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -82,6 +83,7 @@ let sttPending = new Map();
 let tmuxStatusInterval = null;
 let lastTmuxStatusJson = '';
 let activeTmuxSessionName = '';
+const activeTTSStreams = new Map();
 
 function cloneToolCalls(toolCalls) {
   if (!Array.isArray(toolCalls)) return [];
@@ -122,6 +124,27 @@ function getTTSEnabledClients(targetClient = null) {
     }
   }
   return clients;
+}
+
+function buildTTSTargetSet(targetClient = null) {
+  return new Set(getTTSEnabledClients(targetClient));
+}
+
+function sendJsonToClients(clients, payload) {
+  const json = JSON.stringify(payload);
+  for (const client of clients) {
+    if (client.readyState === 1) {
+      client.send(json);
+    }
+  }
+}
+
+function sendBinaryToClients(clients, buffer) {
+  for (const client of clients) {
+    if (client.readyState === 1) {
+      client.send(buffer);
+    }
+  }
 }
 
 function execFileAsync(command, args) {
@@ -473,10 +496,13 @@ function handleOrchestratorEvent(event) {
     currentTurnSeq = 0;
     inFlightTurn = null;
 
+    const ttsScheduled = Boolean(spokenSummary && isTTSReady() && getTTSEnabledClients().length > 0);
+
     broadcastToClients({
       type: 'response',
       fullResponse,
       spokenSummary,
+      ttsScheduled,
       toolCalls: assistantMessage.toolCalls,
       timeline: assistantMessage.timeline,
       model: sessionMetadata.model,
@@ -484,7 +510,7 @@ function handleOrchestratorEvent(event) {
       metadata
     });
 
-    if (spokenSummary && isTTSReady() && getTTSEnabledClients().length > 0) {
+    if (ttsScheduled) {
       synthesizeAndBroadcastAudio(spokenSummary, assistantMessage.id);
     }
     return;
@@ -941,6 +967,7 @@ function startSession() {
 }
 
 function stopSession() {
+  stopAllTTSStreams('session-stopped');
   if (orchestrator) {
     orchestrator.stop();
   }
@@ -961,6 +988,7 @@ function switchOrchestrator(kind) {
   }
 
   if (orchestrator) {
+    stopAllTTSStreams('orchestrator-switched');
     orchestrator.stop();
   }
   resetConversationState();
@@ -1059,36 +1087,133 @@ function interruptSession() {
   return { success: true, cancelledSnapshot };
 }
 
+function cleanupTTSStream(requestId) {
+  const active = activeTTSStreams.get(requestId);
+  if (!active) return null;
+  activeTTSStreams.delete(requestId);
+  return active;
+}
+
+function markMessageSpeechDelivered(messageId) {
+  if (messageId == null) return;
+  const msg = conversationHistory.find((entry) => entry.id === messageId);
+  if (msg) {
+    msg.spokenDelivered = true;
+  }
+}
+
+function removeClientFromTTSStreams(client, reason = 'client-disconnected') {
+  for (const [requestId, active] of activeTTSStreams.entries()) {
+    if (!active.clients.has(client)) continue;
+    active.clients.delete(client);
+    if (active.clients.size === 0) {
+      active.controller.abort(reason);
+    }
+  }
+}
+
+function stopAllTTSStreams(reason = 'cancelled') {
+  for (const active of activeTTSStreams.values()) {
+    active.controller.abort(reason);
+  }
+}
+
+function stopTTSForClient(client, reason = 'tts-disabled') {
+  for (const active of activeTTSStreams.values()) {
+    if (!active.clients.has(client)) continue;
+    active.clients.delete(client);
+    if (client.readyState === 1) {
+      client.send(JSON.stringify({ type: 'tts-cancelled', requestId: active.requestId, reason }));
+    }
+    if (active.clients.size === 0) {
+      active.controller.abort(reason);
+    }
+  }
+}
+
 async function synthesizeAndBroadcastAudio(text, messageId = null, targetClient = null) {
+  const clients = buildTTSTargetSet(targetClient);
+  if (clients.size === 0) {
+    return false;
+  }
+
+  const requestId = randomUUID();
+  const controller = new AbortController();
+  const active = {
+    requestId,
+    clients,
+    controller,
+    messageId,
+    targetClient,
+    chunkSeq: 0,
+    sampleRate: null,
+  };
+  activeTTSStreams.set(requestId, active);
+
   try {
-    const ttsClients = getTTSEnabledClients(targetClient);
-    if (ttsClients.length === 0) {
-      return;
-    }
+    console.log(`[TTS] Streaming with Piper: "${text.slice(0, 80)}..."`);
+    await synthesizeStream(text, {
+      signal: controller.signal,
+      onStart: (meta) => {
+        active.sampleRate = meta.sampleRate;
+        sendJsonToClients(active.clients, {
+          type: 'tts-start',
+          requestId,
+          sampleRate: meta.sampleRate,
+          channels: meta.channels,
+          format: meta.format,
+          textChunkCount: meta.textChunkCount,
+        });
+      },
+      onChunk: (buffer) => {
+        if (active.clients.size === 0) {
+          controller.abort('no-clients');
+          return;
+        }
+        active.chunkSeq += 1;
+        sendJsonToClients(active.clients, {
+          type: 'tts-chunk',
+          requestId,
+          seq: active.chunkSeq,
+          byteLength: buffer.length,
+          sampleRate: active.sampleRate,
+        });
+        sendBinaryToClients(active.clients, buffer);
+      },
+      onEnd: ({ chunkCount }) => {
+        sendJsonToClients(active.clients, {
+          type: 'tts-end',
+          requestId,
+          chunkCount,
+        });
+      },
+    });
 
-    console.log(`[TTS] Synthesizing: "${text.slice(0, 80)}..."`);
-    const { audio, samplingRate } = await synthesize(text);
-    console.log(`[TTS] Done: ${audio.length} samples @ ${samplingRate}Hz`);
-
-    const meta = JSON.stringify({ type: 'tts-audio', samplingRate, numSamples: audio.length });
-    for (const client of ttsClients) {
-      client.send(meta);
-    }
-
-    const buffer = Buffer.from(audio.buffer);
-    for (const client of ttsClients) {
-      client.send(buffer);
-    }
-
-    if (messageId != null) {
-      const msg = conversationHistory.find((m) => m.id === messageId);
-      if (msg) {
-        msg.spokenDelivered = true;
-      }
-    }
+    markMessageSpeechDelivered(messageId);
+    return true;
   } catch (err) {
+    if (err?.name === 'AbortError') {
+      const abortReason = controller.signal.reason || 'cancelled';
+      if (abortReason !== 'no-clients' && abortReason !== 'client-disconnected') {
+        markMessageSpeechDelivered(messageId);
+      }
+      sendJsonToClients(active.clients, {
+        type: 'tts-cancelled',
+        requestId,
+        reason: abortReason,
+      });
+      return false;
+    }
+
     console.error('[TTS] Synthesis error:', err);
-    broadcastToClients({ type: 'tts-error', message: err.message });
+    sendJsonToClients(active.clients, {
+      type: 'tts-error',
+      requestId,
+      message: err.message,
+    });
+    return false;
+  } finally {
+    cleanupTTSStream(requestId);
   }
 }
 
@@ -1352,6 +1477,7 @@ wss.on('connection', (ws) => {
 
       } else if (message.type === 'cancel-request') {
         const interruptResult = interruptSession();
+        stopAllTTSStreams('request-cancelled');
         broadcastToClients({
           type: 'request-cancelled',
           success: interruptResult.success,
@@ -1360,8 +1486,14 @@ wss.on('connection', (ws) => {
           timeline: interruptResult.cancelledSnapshot?.timeline || []
         });
 
+      } else if (message.type === 'stop-tts') {
+        stopTTSForClient(ws, 'stopped-by-client');
+
       } else if (message.type === 'set-tts-enabled') {
         ws.ttsEnabled = message.enabled !== false;
+        if (!ws.ttsEnabled) {
+          stopTTSForClient(ws, 'tts-disabled');
+        }
 
       } else if (message.type === 'list-tmux-sessions') {
         listTmuxSessions()
@@ -1483,6 +1615,7 @@ wss.on('connection', (ws) => {
   ws.on('close', () => {
     console.log('Client disconnected');
     connectedClients.delete(ws);
+    removeClientFromTTSStreams(ws);
   });
 });
 
