@@ -6,7 +6,7 @@ export default function InputArea({ value, onChange, onSend, onCancel, visible }
   if (!visible) return null;
 
   function handleKeyDown(e) {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && e.shiftKey) {
       e.preventDefault();
       onSend();
     } else if (e.key === 'Escape') {

@@ -672,6 +672,19 @@ export default function App() {
     setLiveText('Creating new Codex tmux session...');
   }, [ws]);
 
+  const handleEnableAudio = useCallback(async () => {
+    unlockDebugCues();
+    const unlocked = await tts.unlock();
+    if (!unlocked) {
+      setLiveText('Audio still locked. iPhone: disable Silent Mode and tap again.');
+      setTimeout(() => setLiveText(''), 2200);
+      return;
+    }
+    await tts.playEnableCue();
+    setLiveText('Audio enabled');
+    setTimeout(() => setLiveText(''), 1200);
+  }, [tts, unlockDebugCues]);
+
   // ---- Spacebar shortcut ----
 
   useEffect(() => {
@@ -747,19 +760,6 @@ export default function App() {
     prevIsSpeakingRef.current = tts.isSpeaking;
   }, [tts.isSpeaking, playTTSStart, playTTSStop]);
 
-  useEffect(() => {
-    const unlockAudio = () => {
-      unlockDebugCues();
-      tts.unlock();
-    };
-    document.addEventListener('pointerdown', unlockAudio, true);
-    document.addEventListener('keydown', unlockAudio, true);
-    return () => {
-      document.removeEventListener('pointerdown', unlockAudio, true);
-      document.removeEventListener('keydown', unlockAudio, true);
-    };
-  }, [unlockDebugCues, tts]);
-
   // ---- Render ----
 
   const totalUnreadCompletions = Object.values(tmuxUnreadCompletions).reduce((sum, value) => sum + Number(value || 0), 0);
@@ -787,6 +787,7 @@ export default function App() {
           sessionRunning={ws.sessionRunning}
           orchestratorLabel={formatOrchestratorLabel(ws.orchestrator || selectedOrchestrator)}
           audioEnabled={ttsEnabled}
+          audioUnlocked={tts.isAudioUnlocked}
         />
       </div>
 
@@ -797,6 +798,24 @@ export default function App() {
           className="relative z-20 flex-shrink-0 flex flex-col items-center gap-3 pt-4 border-t border-slate-800/70 mt-4"
           onPointerDown={(e) => e.stopPropagation()}
         >
+          {ttsEnabled && !tts.isAudioUnlocked && (
+            <div className="w-full max-w-lg">
+              <button
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  handleEnableAudio();
+                }}
+                className="w-full px-4 py-3 rounded-lg border border-amber-500/40 bg-amber-900/40 text-amber-100 text-sm font-semibold hover:bg-amber-800/50 transition-colors"
+                title={`Tap to enable audio output (AudioContext: ${tts.audioContextState})`}
+              >
+                Tap to enable audio
+              </button>
+              <div className="mt-1 text-[11px] text-amber-200/80 text-center">
+                AudioContext state: {tts.audioContextState}
+              </div>
+            </div>
+          )}
+
           <div className="text-xs text-slate-500 text-center flex items-center gap-2">
             <span>Active tmux: {activeTmuxSession || 'none'}</span>
             {activeTmuxSession && (

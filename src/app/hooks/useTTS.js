@@ -19,27 +19,53 @@ function pcm16ToFloat32(arrayBuffer) {
 
 export default function useTTS() {
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [audioContextState, setAudioContextState] = useState(audioCtx ? audioCtx.state : 'uninitialized');
   const requestIdRef = useRef(null);
   const sampleRateRef = useRef(22050);
   const nextStartTimeRef = useRef(0);
   const streamOpenRef = useRef(false);
   const scheduledSourcesRef = useRef(new Set());
+  const stateListenerAttachedRef = useRef(false);
 
-  const ensureAudioContextRunning = useCallback(async () => {
+  const bindContextStateListener = useCallback((ctx) => {
+    if (!ctx || stateListenerAttachedRef.current) return;
+    stateListenerAttachedRef.current = true;
+    setAudioContextState(ctx.state);
+    console.log(`[TTS] AudioContext initial state: ${ctx.state}`);
+    ctx.addEventListener('statechange', () => {
+      console.log(`[TTS] AudioContext state changed: ${ctx.state}`);
+      setAudioContextState(ctx.state);
+    });
+  }, []);
+
+  const getOrCreateContext = useCallback((reason = 'unspecified') => {
+    const hadContext = !!audioCtx;
     const ctx = getAudioContext();
+    if (!hadContext) {
+      console.log(`[TTS] AudioContext created (${reason})`);
+    }
+    bindContextStateListener(ctx);
+    return ctx;
+  }, [bindContextStateListener]);
+
+  const ensureAudioContextRunning = useCallback(async (reason = 'unspecified') => {
+    const ctx = getOrCreateContext(reason);
+    console.log(`[TTS] ensure running requested (${reason}), current=${ctx.state}`);
     if (ctx.state !== 'running') {
       try {
         await ctx.resume();
+        console.log(`[TTS] resume resolved (${reason}), now=${ctx.state}`);
       } catch (e) {
-        // iOS may reject when not in a valid user gesture.
+        console.warn(`[TTS] resume rejected (${reason}):`, e);
       }
     }
+    setAudioContextState(ctx.state);
     return ctx;
-  }, []);
+  }, [getOrCreateContext]);
 
   const unlock = useCallback(async () => {
     try {
-      const ctx = await ensureAudioContextRunning();
+      const ctx = await ensureAudioContextRunning('unlock');
       return ctx.state === 'running';
     } catch (e) { /* ignore */ }
     return false;
@@ -77,11 +103,13 @@ export default function useTTS() {
     sampleRateRef.current = Number(meta.sampleRate) || 22050;
     streamOpenRef.current = true;
 
-    const ctx = getAudioContext();
-    if (ctx.state === 'suspended') ctx.resume();
+    const ctx = getOrCreateContext('startStream');
+    if (ctx.state !== 'running') {
+      ensureAudioContextRunning('startStream').catch(() => {});
+    }
     nextStartTimeRef.current = Math.max(nextStartTimeRef.current, ctx.currentTime + 0.05);
     setIsSpeaking(true);
-  }, [stop]);
+  }, [stop, getOrCreateContext, ensureAudioContextRunning]);
 
   const enqueueChunk = useCallback((arrayBuffer, meta) => {
     if (!arrayBuffer || !meta?.requestId || meta.requestId !== requestIdRef.current) {
@@ -89,8 +117,11 @@ export default function useTTS() {
     }
 
     try {
-      const ctx = getAudioContext();
-      if (ctx.state === 'suspended') ctx.resume();
+      const ctx = getOrCreateContext('enqueueChunk');
+      if (ctx.state !== 'running') {
+        console.warn(`[TTS] Skipping chunk playback because AudioContext is ${ctx.state}`);
+        return;
+      }
 
       const float32Array = pcm16ToFloat32(arrayBuffer);
       if (float32Array.length === 0) return;
@@ -118,7 +149,7 @@ export default function useTTS() {
       console.error('[TTS] Playback error:', e);
       stop();
     }
-  }, [clearSpeakingIfIdle, stop]);
+  }, [clearSpeakingIfIdle, stop, getOrCreateContext]);
 
   const endStream = useCallback((requestId) => {
     if (!requestId || requestId !== requestIdRef.current) return;
@@ -136,7 +167,7 @@ export default function useTTS() {
       const now = ctx.currentTime;
       const gain = ctx.createGain();
       gain.gain.setValueAtTime(0.0001, now);
-      gain.gain.exponentialRampToValueAtTime(0.12, now + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.3, now + 0.02);
       gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
       gain.connect(ctx.destination);
 
@@ -168,6 +199,8 @@ export default function useTTS() {
 
   return {
     isSpeaking,
+    audioContextState,
+    isAudioUnlocked: audioContextState === 'running',
     unlock,
     startStream,
     enqueueChunk,

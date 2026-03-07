@@ -18,8 +18,12 @@ export default function Controls({
   isConnected,
   sessionRunning,
   orchestratorLabel,
-  audioEnabled
+  audioEnabled,
+  audioUnlocked
 }) {
+  const audioLabel = !audioEnabled ? 'Audio: Off' : (audioUnlocked ? 'Audio: On' : 'Audio: Locked');
+  const audioConnected = audioEnabled && audioUnlocked;
+
   return (
     <div className="flex items-center justify-center gap-2 flex-wrap px-3 py-3">
       <StatusBadge label={`WS: ${isConnected ? 'On' : 'Off'}`} connected={isConnected} />
@@ -27,7 +31,7 @@ export default function Controls({
         label={`${orchestratorLabel}: ${sessionRunning ? 'On' : 'Off'}`}
         connected={sessionRunning}
       />
-      <StatusBadge label={`Audio: ${audioEnabled ? 'On' : 'Off'}`} connected={audioEnabled} />
+      <StatusBadge label={audioLabel} connected={audioConnected} />
     </div>
   );
 }
