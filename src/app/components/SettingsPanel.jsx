@@ -59,15 +59,19 @@ export default function SettingsPanel({
 
             <label className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-slate-900/70 border border-slate-700">
               <div>
-                <div className="text-sm text-slate-100 font-medium">Enable TTS</div>
-                <div className="text-xs text-slate-400">Play spoken response audio for assistant replies.</div>
+                <div className="text-sm text-slate-100 font-medium">Audio Output</div>
+                <div className="text-xs text-slate-400">Mute/unmute spoken response audio and server TTS generation.</div>
               </div>
-              <input
-                type="checkbox"
-                checked={ttsEnabled}
-                onChange={(e) => onToggleTTSEnabled(e.target.checked)}
-                className="w-4 h-4 accent-cyan-500"
-              />
+              <button
+                onClick={() => onToggleTTSEnabled(!ttsEnabled)}
+                className={`px-3 py-1.5 rounded-md text-xs font-semibold border transition-colors ${
+                  ttsEnabled
+                    ? 'bg-emerald-600/20 border-emerald-500/50 text-emerald-200 hover:bg-emerald-600/30'
+                    : 'bg-rose-600/20 border-rose-500/50 text-rose-200 hover:bg-rose-600/30'
+                }`}
+              >
+                {ttsEnabled ? 'Audio On' : 'Audio Off'}
+              </button>
             </label>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">

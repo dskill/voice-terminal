@@ -25,12 +25,25 @@ export default function useTTS() {
   const streamOpenRef = useRef(false);
   const scheduledSourcesRef = useRef(new Set());
 
+  const ensureAudioContextRunning = useCallback(async () => {
+    const ctx = getAudioContext();
+    if (ctx.state !== 'running') {
+      try {
+        await ctx.resume();
+      } catch (e) {
+        // iOS may reject when not in a valid user gesture.
+      }
+    }
+    return ctx;
+  }, []);
+
   const unlock = useCallback(async () => {
     try {
-      const ctx = getAudioContext();
-      if (ctx.state === 'suspended') await ctx.resume();
+      const ctx = await ensureAudioContextRunning();
+      return ctx.state === 'running';
     } catch (e) { /* ignore */ }
-  }, []);
+    return false;
+  }, [ensureAudioContextRunning]);
 
   const clearSpeakingIfIdle = useCallback(() => {
     if (!streamOpenRef.current && scheduledSourcesRef.current.size === 0) {
@@ -113,12 +126,53 @@ export default function useTTS() {
     clearSpeakingIfIdle();
   }, [clearSpeakingIfIdle]);
 
+  const playEnableCue = useCallback(async () => {
+    try {
+      const ctx = await ensureAudioContextRunning();
+      if (ctx.state !== 'running') {
+        return false;
+      }
+
+      const now = ctx.currentTime;
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(0.12, now + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
+      gain.connect(ctx.destination);
+
+      const toneA = ctx.createOscillator();
+      toneA.type = 'sine';
+      toneA.frequency.setValueAtTime(660, now);
+      toneA.connect(gain);
+      toneA.start(now);
+      toneA.stop(now + 0.09);
+
+      const toneB = ctx.createOscillator();
+      toneB.type = 'sine';
+      toneB.frequency.setValueAtTime(880, now + 0.09);
+      toneB.connect(gain);
+      toneB.start(now + 0.09);
+      toneB.stop(now + 0.18);
+
+      toneB.onended = () => {
+        try {
+          gain.disconnect();
+        } catch (e) { /* ignore */ }
+      };
+      return true;
+    } catch (e) {
+      console.warn('[TTS] Failed to play enable cue:', e);
+      return false;
+    }
+  }, [ensureAudioContextRunning]);
+
   return {
     isSpeaking,
     unlock,
     startStream,
     enqueueChunk,
     endStream,
+    playEnableCue,
     stop,
   };
 }

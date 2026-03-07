@@ -569,10 +569,24 @@ export default function App() {
     const value = !!enabled;
     setTTSEnabled(value);
     localStorage.setItem('voice-terminal-tts-enabled', value ? '1' : '0');
+    ws.setTTSEnabled(value);
     if (!value) {
       ws.stopTTS();
       tts.stop();
+      setLiveText('Audio muted');
+      setTimeout(() => setLiveText(''), 900);
+      return;
     }
+    (async () => {
+      const unlocked = await tts.unlock();
+      const played = await tts.playEnableCue();
+      if (unlocked && played) {
+        setLiveText('Audio on');
+      } else {
+        setLiveText('Audio on - if silent on iPhone, turn off Silent Mode and tap again');
+      }
+      setTimeout(() => setLiveText(''), 2200);
+    })();
   }, [tts, ws]);
 
   const cancelMessage = useCallback(() => {
@@ -772,6 +786,7 @@ export default function App() {
           isConnected={ws.isConnected}
           sessionRunning={ws.sessionRunning}
           orchestratorLabel={formatOrchestratorLabel(ws.orchestrator || selectedOrchestrator)}
+          audioEnabled={ttsEnabled}
         />
       </div>
 
