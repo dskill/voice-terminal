@@ -10,6 +10,15 @@ import InputArea from './components/InputArea';
 import SessionRadialMenu from './components/SessionRadialMenu';
 import SettingsPanel from './components/SettingsPanel';
 
+function formatFileSize(bytes) {
+  const size = Number(bytes || 0);
+  if (!Number.isFinite(size) || size <= 0) return '0 B';
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  if (size < 1024 * 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
 function appendTimelineEvent(currentTimeline, incomingEvent) {
   const next = Array.isArray(currentTimeline) ? [...currentTimeline] : [];
   const last = next[next.length - 1];
@@ -76,6 +85,7 @@ export default function App() {
   const [tmuxStatusBySession, setTmuxStatusBySession] = useState({});
   const [tmuxUnreadCompletions, setTmuxUnreadCompletions] = useState({});
   const [doneFlashVisible, setDoneFlashVisible] = useState(false);
+  const [uploadState, setUploadState] = useState(null);
   const [selectedOrchestrator, setSelectedOrchestrator] = useState(() => {
     const stored = localStorage.getItem('voice-terminal-orchestrator');
     if (stored === 'codex') return 'codex';
@@ -629,23 +639,87 @@ export default function App() {
     cancelProcessing();
   }, [tts, cancelProcessing, ws]);
 
+  const uploadFileWithProgress = useCallback((file) => {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      const formData = new FormData();
+      formData.append('file', file);
+
+      xhr.open('POST', '/upload');
+      xhr.responseType = 'json';
+
+      xhr.upload.onprogress = (event) => {
+        if (!event.lengthComputable) return;
+        setUploadState((prev) => ({
+          ...(prev || {}),
+          status: 'uploading',
+          filename: file.name,
+          size: file.size,
+          progress: Math.min(100, Math.round((event.loaded / event.total) * 100))
+        }));
+      };
+
+      xhr.onerror = () => {
+        reject(new Error('Network error while uploading'));
+      };
+
+      xhr.onload = () => {
+        const raw = xhr.response ?? (() => {
+          try {
+            return JSON.parse(xhr.responseText || '{}');
+          } catch {
+            return {};
+          }
+        })();
+
+        if (xhr.status >= 200 && xhr.status < 300 && raw?.success) {
+          resolve(raw);
+          return;
+        }
+
+        const error = new Error(raw?.error || `Upload failed (${xhr.status})`);
+        error.payload = raw;
+        reject(error);
+      };
+
+      xhr.send(formData);
+    });
+  }, []);
+
   const handleFileChange = useCallback(async (e) => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
+
+    setUploadState({
+      status: 'uploading',
+      filename: file.name,
+      size: file.size,
+      progress: 0
+    });
+
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      const response = await fetch('/upload', { method: 'POST', body: formData });
-      const result = await response.json();
-      if (!response.ok || !result.success) throw new Error(result.error || 'Upload failed');
-      setLiveText(`Uploaded: ${file.name}`);
-      setTimeout(() => setLiveText(''), 2000);
+      const result = await uploadFileWithProgress(file);
+      setUploadState({
+        status: 'success',
+        filename: result.filename || file.name,
+        size: Number(result.size ?? file.size ?? 0),
+        path: result.path,
+        message: 'Saved and shared with the agent.'
+      });
     } catch (err) {
-      setLiveText(`Upload error: ${err.message || 'Upload failed'}`);
-      setTimeout(() => setLiveText(''), 3000);
+      const payload = err?.payload || {};
+      setUploadState({
+        status: 'error',
+        filename: payload.filename || file.name,
+        size: Number(payload.size ?? file.size ?? 0),
+        path: payload.path || '',
+        message: payload.saved
+          ? `Saved file, but could not notify the agent: ${err.message || 'Upload failed'}`
+          : (err.message || 'Upload failed')
+      });
     }
-  }, []);
+  }, [uploadFileWithProgress]);
 
   // ---- Session controls ----
 
@@ -805,6 +879,7 @@ export default function App() {
   const activeStatusDot = activeTmuxStatus?.state === 'working' ? 'bg-emerald-400' : 'bg-slate-500';
   const isMicInCancelMode = isProcessing || tts.isSpeaking;
   const micStatusText = tts.isSpeaking ? 'Speaking...' : liveText;
+  const isUploading = uploadState?.status === 'uploading';
 
   return (
     <div className="h-dvh flex flex-col bg-slate-950 text-slate-100">
@@ -886,6 +961,66 @@ export default function App() {
             </div>
           )}
 
+          {uploadState && (
+            <div className={`w-full max-w-lg rounded-xl border px-4 py-3 ${
+              uploadState.status === 'error'
+                ? 'border-rose-500/40 bg-rose-950/40 text-rose-100'
+                : uploadState.status === 'success'
+                  ? 'border-emerald-500/30 bg-emerald-950/30 text-emerald-50'
+                  : 'border-cyan-500/30 bg-slate-900 text-slate-100'
+            }`}>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium">
+                    {uploadState.status === 'uploading' && 'Uploading file'}
+                    {uploadState.status === 'success' && 'Upload complete'}
+                    {uploadState.status === 'error' && 'Upload issue'}
+                  </div>
+                  <div className="mt-1 text-sm truncate">{uploadState.filename}</div>
+                  <div className="mt-1 text-xs opacity-80">
+                    {formatFileSize(uploadState.size)}
+                    {uploadState.path ? ` • ${uploadState.path}` : ''}
+                  </div>
+                  {uploadState.message && (
+                    <div className="mt-1 text-xs opacity-90">{uploadState.message}</div>
+                  )}
+                </div>
+                <button
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                    if (!isUploading) setUploadState(null);
+                  }}
+                  disabled={isUploading}
+                  className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${
+                    isUploading
+                      ? 'bg-slate-800/60 text-slate-500'
+                      : 'bg-slate-800/80 text-slate-300 hover:bg-slate-700 hover:text-white'
+                  }`}
+                  title={isUploading ? 'Upload in progress' : 'Dismiss upload status'}
+                >
+                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                    <path d="M18 6 6 18M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              {uploadState.status === 'uploading' && (
+                <div className="mt-3">
+                  <div className="flex items-center justify-between text-xs text-slate-300">
+                    <span>Sending to server</span>
+                    <span>{Math.max(0, Math.min(100, uploadState.progress || 0))}%</span>
+                  </div>
+                  <div className="mt-1 h-2 rounded-full bg-slate-800 overflow-hidden">
+                    <div
+                      className="h-full rounded-full bg-cyan-400 transition-[width] duration-150"
+                      style={{ width: `${Math.max(4, Math.min(100, uploadState.progress || 0))}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           <InputArea
             value={inputText}
             onChange={setInputText}
@@ -952,12 +1087,26 @@ export default function App() {
 
             <label
               htmlFor="file-upload-input"
-              className="w-12 h-12 rounded-full flex items-center justify-center bg-slate-900 border border-slate-700 text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer select-none"
-              title="Upload file"
+              className={`w-12 h-12 rounded-full flex items-center justify-center border transition-colors select-none ${
+                isUploading
+                  ? 'bg-slate-900/60 border-slate-800 text-slate-500 cursor-not-allowed pointer-events-none'
+                  : 'bg-slate-900 border-slate-700 text-slate-200 hover:bg-slate-800 cursor-pointer'
+              }`}
+              title={isUploading ? 'Upload in progress' : 'Upload file'}
             >
-              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.9-9.9a4 4 0 1 1 5.66 5.66l-9.2 9.2a2 2 0 1 1-2.83-2.83l8.49-8.48" />
-              </svg>
+              {isUploading ? (
+                <div className="relative w-5 h-5">
+                  <div className="absolute inset-0 rounded-full border-2 border-slate-700" />
+                  <div
+                    className="absolute inset-0 rounded-full border-2 border-cyan-400 border-t-transparent"
+                    style={{ transform: `rotate(${Math.round((uploadState.progress || 0) * 3.6)}deg)` }}
+                  />
+                </div>
+              ) : (
+                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.9-9.9a4 4 0 1 1 5.66 5.66l-9.2 9.2a2 2 0 1 1-2.83-2.83l8.49-8.48" />
+                </svg>
+              )}
             </label>
           </div>
         </div>

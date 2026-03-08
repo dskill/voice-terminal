@@ -54,6 +54,7 @@ const publicPath = join(__dirname, '../public');
 const systemPromptPath = join(__dirname, '../orchestrator-system-prompt.md');
 const staticPath = existsSync(distPath) ? distPath : publicPath;
 const uploadsDir = join(homedir(), 'voice-terminal', 'uploads');
+const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024; // 2 GiB
 console.log(`Serving static files from: ${staticPath}`);
 app.use(express.static(staticPath));
 
@@ -1148,7 +1149,9 @@ function parseMultipartForm(req) {
   const form = formidable({
     multiples: false,
     uploadDir: tmpdir(),
-    keepExtensions: true
+    keepExtensions: true,
+    maxFileSize: MAX_UPLOAD_BYTES,
+    maxTotalFileSize: MAX_UPLOAD_BYTES
   });
 
   return form.parse(req);
@@ -1161,7 +1164,7 @@ app.post('/upload', async (req, res) => {
     const uploadedFile = Array.isArray(uploadedValue) ? uploadedValue[0] : uploadedValue;
 
     if (!uploadedFile?.filepath) {
-      res.status(400).json({ success: false, error: 'Missing uploaded file' });
+      res.status(400).json({ success: false, error: 'No file was attached to the upload request.' });
       return;
     }
 
@@ -1177,16 +1180,33 @@ app.post('/upload', async (req, res) => {
     const injectedMessage = `📎 User uploaded a file: ${displayPath}`;
     const result = dispatchUserMessage(injectedMessage);
     if (result?.error) {
-      res.status(409).json({ success: false, error: result.error });
+      res.status(409).json({
+        success: false,
+        saved: true,
+        filename,
+        path: displayPath,
+        size: Number(uploadedFile.size || 0),
+        error: `File saved, but the agent could not accept it right now: ${result.error}`
+      });
       return;
     }
 
     res.json({
       success: true,
       filename,
-      path: displayPath
+      path: displayPath,
+      size: Number(uploadedFile.size || 0),
+      mimetype: uploadedFile.mimetype || ''
     });
   } catch (err) {
+    if (err?.code === 1016) {
+      res.status(413).json({
+        success: false,
+        error: `File is too large. The current upload limit is ${Math.round(MAX_UPLOAD_BYTES / (1024 * 1024 * 1024))} GB.`
+      });
+      return;
+    }
+
     res.status(500).json({
       success: false,
       error: err.message || 'Upload failed'
