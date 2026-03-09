@@ -75,6 +75,17 @@ function vmUpdateTone(update) {
   return 'text-slate-300';
 }
 
+function formatVmUpdateAllSummary(result) {
+  if (!result) return '';
+  if (result.success) return 'Update all succeeded';
+  return `Update all failed${result.error ? `: ${result.error}` : ''}`;
+}
+
+function vmUpdateAllTone(result) {
+  if (!result) return 'text-slate-400';
+  return result.success ? 'text-emerald-300' : 'text-rose-300';
+}
+
 export default function App() {
   const ORCHESTRATOR_OPTIONS = [
     { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
@@ -106,6 +117,9 @@ export default function App() {
   const [vmUpdatesByName, setVmUpdatesByName] = useState({});
   const [vmUpdatesLoading, setVmUpdatesLoading] = useState(false);
   const [vmUpdatesError, setVmUpdatesError] = useState('');
+  const [vmUpdateAllByName, setVmUpdateAllByName] = useState({});
+  const [vmUpdateAllLoading, setVmUpdateAllLoading] = useState(false);
+  const [vmUpdateAllError, setVmUpdateAllError] = useState('');
   const [autoSend, setAutoSend] = useState(() => {
     return localStorage.getItem('voice-terminal-auto-send') === '1';
   });
@@ -704,6 +718,31 @@ export default function App() {
       setVmUpdatesLoading(false);
     }
   }, []);
+
+  const runUpdateAll = useCallback(async () => {
+    setVmUpdateAllLoading(true);
+    setVmUpdateAllError('');
+    setVmUpdateAllByName({});
+    try {
+      const response = await fetch('/api/vm-sessions/update-all', { method: 'POST' });
+      if (!response.ok) {
+        throw new Error(`Request failed (${response.status})`);
+      }
+      const data = await response.json();
+      const sessions = Array.isArray(data) ? data : [];
+      const byName = {};
+      for (const session of sessions) {
+        if (!session?.name || !session?.hasVoiceTerminal) continue;
+        byName[session.name] = session.updateAll || null;
+      }
+      setVmUpdateAllByName(byName);
+      fetchVmSessions();
+    } catch (err) {
+      setVmUpdateAllError(err?.message || 'Failed to run update-all');
+    } finally {
+      setVmUpdateAllLoading(false);
+    }
+  }, [fetchVmSessions]);
 
   const cancelMessage = useCallback(() => {
     setShowInput(false);
@@ -1335,6 +1374,12 @@ export default function App() {
                   </div>
                 )}
 
+                {!vmSessionsLoading && !vmSessionsError && vmUpdateAllError && (
+                  <div className="rounded-lg border border-rose-600/40 bg-rose-950/40 px-3 py-2 text-sm text-rose-100">
+                    {vmUpdateAllError}
+                  </div>
+                )}
+
                 {!vmSessionsLoading && !vmSessionsError && visibleVmSessions.length === 0 && (
                   <div className="rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 text-sm text-slate-300">
                     No VMs with voice-terminal detected.
@@ -1354,11 +1399,16 @@ export default function App() {
                     <div className={`text-[11px] mt-1 ${vmUpdateTone(vmUpdatesByName[session.name])}`}>
                       {formatVmUpdateSummary(vmUpdatesByName[session.name])}
                     </div>
+                    {vmUpdateAllByName[session.name] && (
+                      <div className={`text-[11px] mt-1 ${vmUpdateAllTone(vmUpdateAllByName[session.name])}`}>
+                        {formatVmUpdateAllSummary(vmUpdateAllByName[session.name])}
+                      </div>
+                    )}
                   </button>
                 ))}
               </div>
 
-              <div className="px-4 pb-4 grid grid-cols-2 gap-2">
+              <div className="px-4 pb-4 grid grid-cols-3 gap-2">
                 <button
                   onClick={fetchVmSessions}
                   disabled={vmSessionsLoading}
@@ -1372,14 +1422,25 @@ export default function App() {
                 </button>
                 <button
                   onClick={checkVmUpdates}
-                  disabled={vmUpdatesLoading || vmSessionsLoading || visibleVmSessions.length === 0}
+                  disabled={vmUpdatesLoading || vmUpdateAllLoading || vmSessionsLoading || visibleVmSessions.length === 0}
                   className={`w-full px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
-                    (vmUpdatesLoading || vmSessionsLoading || visibleVmSessions.length === 0)
+                    (vmUpdatesLoading || vmUpdateAllLoading || vmSessionsLoading || visibleVmSessions.length === 0)
                       ? 'bg-slate-900 border-slate-800 text-slate-500'
                       : 'bg-cyan-700/50 border-cyan-500/40 text-cyan-100 hover:bg-cyan-600/60'
                   }`}
                 >
                   {vmUpdatesLoading ? 'Checking...' : 'Updates'}
+                </button>
+                <button
+                  onClick={runUpdateAll}
+                  disabled={vmUpdateAllLoading || vmUpdatesLoading || vmSessionsLoading || visibleVmSessions.length === 0}
+                  className={`w-full px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                    (vmUpdateAllLoading || vmUpdatesLoading || vmSessionsLoading || visibleVmSessions.length === 0)
+                      ? 'bg-slate-900 border-slate-800 text-slate-500'
+                      : 'bg-emerald-700/40 border-emerald-500/40 text-emerald-100 hover:bg-emerald-600/50'
+                  }`}
+                >
+                  {vmUpdateAllLoading ? 'Updating...' : 'Update All'}
                 </button>
               </div>
             </div>

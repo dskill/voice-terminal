@@ -162,6 +162,19 @@ function execFileAsync(command, args) {
   });
 }
 
+function execFileDetailed(command, args) {
+  return new Promise((resolve) => {
+    execFile(command, args, { encoding: 'utf8' }, (error, stdout, stderr) => {
+      resolve({
+        ok: !error,
+        stdout: String(stdout || '').trim(),
+        stderr: String(stderr || '').trim(),
+        error: error ? (error.message || 'command failed') : ''
+      });
+    });
+  });
+}
+
 const HIDDEN_SESSIONS = new Set(['voice-terminal', 'claude-code-sdk']);
 
 async function listTmuxSessions() {
@@ -1244,6 +1257,17 @@ async function readVmUpdateStatus(hostname) {
   }
 }
 
+async function updateAllOnVm(hostname) {
+  const result = await execFileDetailed('node', [join(__dirname, '../bin/vm-setup.js'), hostname]);
+
+  const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
+  return {
+    success: result.ok,
+    error: result.ok ? '' : (result.stderr || result.error || 'update failed'),
+    output
+  };
+}
+
 app.get('/api/vm-sessions', async (_req, res) => {
   try {
     const rawList = await execFileAsync('ssh', ['exe.dev', 'ls']);
@@ -1285,6 +1309,34 @@ app.get('/api/vm-sessions/updates', async (_req, res) => {
   } catch (err) {
     res.status(500).json({
       error: err.message || 'Failed to check VM updates'
+    });
+  }
+});
+
+app.post('/api/vm-sessions/update-all', async (_req, res) => {
+  try {
+    const rawList = await execFileAsync('ssh', ['exe.dev', 'ls']);
+    const vmNames = parseVmNamesFromExeList(rawList);
+    const sessions = await Promise.all(vmNames.map(async (name) => {
+      const url = `https://${name}.exe.xyz:${PORT}/`;
+      const hasVoiceTerminal = await vmHasVoiceTerminal(`${name}.exe.xyz`);
+      return { name, url, hasVoiceTerminal };
+    }));
+
+    const installed = sessions.filter((session) => session.hasVoiceTerminal);
+    const updated = await Promise.all(installed.map(async (session) => ({
+      name: session.name,
+      result: await updateAllOnVm(`${session.name}.exe.xyz`)
+    })));
+    const resultByName = Object.fromEntries(updated.map((entry) => [entry.name, entry.result]));
+
+    res.json(sessions.map((session) => ({
+      ...session,
+      updateAll: session.hasVoiceTerminal ? (resultByName[session.name] || null) : null
+    })));
+  } catch (err) {
+    res.status(500).json({
+      error: err.message || 'Failed to update VM sessions'
     });
   }
 });
