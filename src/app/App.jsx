@@ -50,6 +50,31 @@ function buildStreamingFromTimeline(timeline, fallbackText = '', fallbackToolCal
   };
 }
 
+function formatVmUpdateSummary(update) {
+  if (!update) return 'No update check yet';
+  if (update.error) return 'Check failed';
+
+  let gitText = 'git status unknown';
+  if (update.gitState === 'up-to-date') gitText = 'up to date';
+  else if (update.gitState === 'behind') gitText = `behind by ${Number(update.behindCount || 0)} commits`;
+  else if (update.gitState === 'ahead') gitText = `ahead by ${Number(update.aheadCount || 0)} commits`;
+  else if (update.gitState === 'diverged') {
+    gitText = `diverged (${Number(update.aheadCount || 0)} ahead, ${Number(update.behindCount || 0)} behind)`;
+  }
+
+  const serverText = update.serverRunning ? 'server running' : 'server down';
+  return `${gitText} / ${serverText}`;
+}
+
+function vmUpdateTone(update) {
+  if (!update) return 'text-slate-400';
+  if (update.error) return 'text-rose-300';
+  if (!update.serverRunning) return 'text-rose-300';
+  if (update.gitState === 'behind' || update.gitState === 'diverged') return 'text-amber-300';
+  if (update.gitState === 'up-to-date') return 'text-emerald-300';
+  return 'text-slate-300';
+}
+
 export default function App() {
   const ORCHESTRATOR_OPTIONS = [
     { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
@@ -78,6 +103,9 @@ export default function App() {
   const [vmSessions, setVmSessions] = useState([]);
   const [vmSessionsLoading, setVmSessionsLoading] = useState(false);
   const [vmSessionsError, setVmSessionsError] = useState('');
+  const [vmUpdatesByName, setVmUpdatesByName] = useState({});
+  const [vmUpdatesLoading, setVmUpdatesLoading] = useState(false);
+  const [vmUpdatesError, setVmUpdatesError] = useState('');
   const [autoSend, setAutoSend] = useState(() => {
     return localStorage.getItem('voice-terminal-auto-send') === '1';
   });
@@ -630,6 +658,8 @@ export default function App() {
     setVmSessionsLoading(true);
     setVmSessions([]);
     setVmSessionsError('');
+    setVmUpdatesByName({});
+    setVmUpdatesError('');
     try {
       const response = await fetch('/api/vm-sessions');
       if (!response.ok) {
@@ -651,6 +681,29 @@ export default function App() {
     setShowVmSessions(true);
     fetchVmSessions();
   }, [fetchVmSessions]);
+
+  const checkVmUpdates = useCallback(async () => {
+    setVmUpdatesLoading(true);
+    setVmUpdatesError('');
+    try {
+      const response = await fetch('/api/vm-sessions/updates');
+      if (!response.ok) {
+        throw new Error(`Request failed (${response.status})`);
+      }
+      const data = await response.json();
+      const sessions = Array.isArray(data) ? data : [];
+      const byName = {};
+      for (const session of sessions) {
+        if (!session?.name || !session?.hasVoiceTerminal) continue;
+        byName[session.name] = session.update || null;
+      }
+      setVmUpdatesByName(byName);
+    } catch (err) {
+      setVmUpdatesError(err?.message || 'Failed to check VM updates');
+    } finally {
+      setVmUpdatesLoading(false);
+    }
+  }, []);
 
   const cancelMessage = useCallback(() => {
     setShowInput(false);
@@ -1276,6 +1329,12 @@ export default function App() {
                   </div>
                 )}
 
+                {!vmSessionsLoading && !vmSessionsError && vmUpdatesError && (
+                  <div className="rounded-lg border border-rose-600/40 bg-rose-950/40 px-3 py-2 text-sm text-rose-100">
+                    {vmUpdatesError}
+                  </div>
+                )}
+
                 {!vmSessionsLoading && !vmSessionsError && visibleVmSessions.length === 0 && (
                   <div className="rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 text-sm text-slate-300">
                     No VMs with voice-terminal detected.
@@ -1292,11 +1351,14 @@ export default function App() {
                   >
                     <div className="text-sm font-medium text-slate-100">{session.name}</div>
                     <div className="text-xs text-cyan-300 mt-0.5">{session.url}</div>
+                    <div className={`text-[11px] mt-1 ${vmUpdateTone(vmUpdatesByName[session.name])}`}>
+                      {formatVmUpdateSummary(vmUpdatesByName[session.name])}
+                    </div>
                   </button>
                 ))}
               </div>
 
-              <div className="px-4 pb-4">
+              <div className="px-4 pb-4 grid grid-cols-2 gap-2">
                 <button
                   onClick={fetchVmSessions}
                   disabled={vmSessionsLoading}
@@ -1307,6 +1369,17 @@ export default function App() {
                   }`}
                 >
                   Refresh VM list
+                </button>
+                <button
+                  onClick={checkVmUpdates}
+                  disabled={vmUpdatesLoading || vmSessionsLoading || visibleVmSessions.length === 0}
+                  className={`w-full px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                    (vmUpdatesLoading || vmSessionsLoading || visibleVmSessions.length === 0)
+                      ? 'bg-slate-900 border-slate-800 text-slate-500'
+                      : 'bg-cyan-700/50 border-cyan-500/40 text-cyan-100 hover:bg-cyan-600/60'
+                  }`}
+                >
+                  {vmUpdatesLoading ? 'Checking...' : 'Updates'}
                 </button>
               </div>
             </div>

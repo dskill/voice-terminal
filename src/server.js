@@ -1200,6 +1200,50 @@ async function vmHasVoiceTerminal(hostname) {
   }
 }
 
+async function readVmUpdateStatus(hostname) {
+  try {
+    const output = await execFileAsync('ssh', [
+      '-o',
+      'ConnectTimeout=5',
+      '-o',
+      'BatchMode=yes',
+      '-o',
+      'StrictHostKeyChecking=accept-new',
+      hostname,
+      'cd ~/voice-terminal >/dev/null 2>&1 || { echo "ERROR:missing-repo"; exit 0; }; if pgrep -f "node src/server.js|node --watch src/server.js|npm run dev" >/dev/null 2>&1; then echo "SERVER:running"; else echo "SERVER:down"; fi; git fetch --quiet origin >/dev/null 2>&1 || true; LOCAL=$(git rev-parse HEAD 2>/dev/null || echo ""); UPSTREAM=$(git rev-parse @{u} 2>/dev/null || echo ""); if [ -z "$UPSTREAM" ]; then UPSTREAM=$(git rev-parse origin/HEAD 2>/dev/null || echo ""); fi; if [ -z "$LOCAL" ] || [ -z "$UPSTREAM" ]; then echo "GIT:unknown"; echo "AHEAD:0"; echo "BEHIND:0"; exit 0; fi; AHEAD=$(git rev-list --count "$UPSTREAM..$LOCAL" 2>/dev/null || echo "0"); BEHIND=$(git rev-list --count "$LOCAL..$UPSTREAM" 2>/dev/null || echo "0"); if [ "$AHEAD" = "0" ] && [ "$BEHIND" = "0" ]; then STATE="up-to-date"; elif [ "$AHEAD" = "0" ]; then STATE="behind"; elif [ "$BEHIND" = "0" ]; then STATE="ahead"; else STATE="diverged"; fi; echo "GIT:$STATE"; echo "AHEAD:$AHEAD"; echo "BEHIND:$BEHIND"'
+    ]);
+
+    const result = {
+      serverRunning: false,
+      gitState: 'unknown',
+      aheadCount: 0,
+      behindCount: 0,
+      error: ''
+    };
+
+    for (const line of String(output || '').split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      if (trimmed === 'SERVER:running') result.serverRunning = true;
+      else if (trimmed === 'SERVER:down') result.serverRunning = false;
+      else if (trimmed.startsWith('GIT:')) result.gitState = trimmed.slice(4).trim() || 'unknown';
+      else if (trimmed.startsWith('AHEAD:')) result.aheadCount = Number(trimmed.slice(6).trim() || 0);
+      else if (trimmed.startsWith('BEHIND:')) result.behindCount = Number(trimmed.slice(7).trim() || 0);
+      else if (trimmed.startsWith('ERROR:')) result.error = trimmed.slice(6).trim() || 'unknown error';
+    }
+
+    return result;
+  } catch (err) {
+    return {
+      serverRunning: false,
+      gitState: 'unknown',
+      aheadCount: 0,
+      behindCount: 0,
+      error: err.message || 'ssh check failed'
+    };
+  }
+}
+
 app.get('/api/vm-sessions', async (_req, res) => {
   try {
     const rawList = await execFileAsync('ssh', ['exe.dev', 'ls']);
@@ -1213,6 +1257,34 @@ app.get('/api/vm-sessions', async (_req, res) => {
   } catch (err) {
     res.status(500).json({
       error: err.message || 'Failed to list VM sessions'
+    });
+  }
+});
+
+app.get('/api/vm-sessions/updates', async (_req, res) => {
+  try {
+    const rawList = await execFileAsync('ssh', ['exe.dev', 'ls']);
+    const vmNames = parseVmNamesFromExeList(rawList);
+    const sessions = await Promise.all(vmNames.map(async (name) => {
+      const url = `https://${name}.exe.xyz:${PORT}/`;
+      const hasVoiceTerminal = await vmHasVoiceTerminal(`${name}.exe.xyz`);
+      return { name, url, hasVoiceTerminal };
+    }));
+
+    const installed = sessions.filter((session) => session.hasVoiceTerminal);
+    const checked = await Promise.all(installed.map(async (session) => ({
+      name: session.name,
+      update: await readVmUpdateStatus(`${session.name}.exe.xyz`)
+    })));
+    const updateByName = Object.fromEntries(checked.map((entry) => [entry.name, entry.update]));
+
+    res.json(sessions.map((session) => ({
+      ...session,
+      update: session.hasVoiceTerminal ? (updateByName[session.name] || null) : null
+    })));
+  } catch (err) {
+    res.status(500).json({
+      error: err.message || 'Failed to check VM updates'
     });
   }
 });
