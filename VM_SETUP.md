@@ -79,7 +79,7 @@ sudo npm install -g @openai/codex
 
 ## 6. Set Up Piper TTS
 
-Piper TTS is disabled unless `PIPER_MODEL` points to a local `.onnx` voice model. The recommended model is `en_US-lessac-medium`.
+Piper TTS is disabled unless `PIPER_MODEL` points to a local `.onnx` voice model. The recommended model is **`en_US-lessac-medium`** — it is the best-sounding voice for this application.
 
 ### Option A: Copy from an existing VM (fastest)
 

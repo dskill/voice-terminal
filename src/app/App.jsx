@@ -624,6 +624,22 @@ export default function App() {
     setLiveText('');
   }, []);
 
+  const handleUploadFiles = useCallback((files) => {
+    const list = Array.isArray(files) ? files : Array.from(files || []);
+    if (list.length === 0) return;
+
+    const attachmentLines = list.map((file) => `- ${file.name}`);
+    const attachmentBlock = `Attached files:\n${attachmentLines.join('\n')}`;
+
+    setInputText((prev) => {
+      const current = String(prev || '').trim();
+      if (!current) return attachmentBlock;
+      return `${current}\n\n${attachmentBlock}`;
+    });
+    setShowInput(true);
+    setLiveText(`Added ${list.length} file${list.length === 1 ? '' : 's'} to message`);
+  }, []);
+
   const cancelProcessing = useCallback(() => {
     ws.cancelRequest();
     tts.stop();
@@ -1026,6 +1042,7 @@ export default function App() {
             onChange={setInputText}
             onSend={sendMessage}
             onCancel={cancelMessage}
+            onUploadFiles={handleUploadFiles}
             visible={showInput}
           />
 

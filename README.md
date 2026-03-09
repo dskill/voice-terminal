@@ -37,6 +37,8 @@ Access at `https://your-vm.exe.xyz:3456/`
 
 Server-side TTS is disabled unless `PIPER_MODEL` points to a local Piper `.onnx` voice model.
 
+**Recommended model: `en_US-lessac-medium`** — this is the best-sounding voice for this application. See [VM_SETUP.md](VM_SETUP.md#6-set-up-piper-tts) for download instructions.
+
 Optional env vars:
 - `PIPER_BIN` - Piper executable name or absolute path (default: `piper`)
 - `PIPER_MODEL` - Path to the Piper `.onnx` model file
@@ -48,8 +50,8 @@ Optional env vars:
 Example:
 
 ```bash
-export PIPER_MODEL=$HOME/models/en_US-amy-medium.onnx
-export PIPER_MODEL_CONFIG=$HOME/models/en_US-amy-medium.onnx.json
+export PIPER_MODEL=$HOME/voice-terminal/models/piper/en_US-lessac-medium.onnx
+export PIPER_MODEL_CONFIG=$HOME/voice-terminal/models/piper/en_US-lessac-medium.onnx.json
 npm start
 ```
 
