@@ -1157,6 +1157,66 @@ function parseMultipartForm(req) {
   return form.parse(req);
 }
 
+function parseVmNamesFromExeList(rawOutput) {
+  const text = String(rawOutput || '');
+  const names = new Set();
+
+  const fqdnRegex = /([a-z0-9][a-z0-9-]*)\.exe\.xyz\b/gi;
+  let match;
+  while ((match = fqdnRegex.exec(text)) !== null) {
+    if (match[1]) names.add(match[1].toLowerCase());
+  }
+
+  if (names.size > 0) return [...names];
+
+  const blocked = new Set(['your', 'vms', 'name', 'status', 'image', 'running', 'stopped']);
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const firstCol = trimmed.split(/\s+/)[0] || '';
+    const normalized = firstCol.toLowerCase().replace(/[^a-z0-9-]/g, '');
+    if (!normalized || blocked.has(normalized)) continue;
+    if (/^[a-z0-9][a-z0-9-]*$/.test(normalized)) names.add(normalized);
+  }
+
+  return [...names];
+}
+
+async function vmHasVoiceTerminal(hostname) {
+  try {
+    const output = await execFileAsync('ssh', [
+      '-o',
+      'ConnectTimeout=5',
+      '-o',
+      'BatchMode=yes',
+      '-o',
+      'StrictHostKeyChecking=accept-new',
+      hostname,
+      'test -d ~/voice-terminal && test -f ~/voice-terminal/package.json && echo yes || echo no'
+    ]);
+    return String(output).split('\n').some((line) => line.trim().toLowerCase() === 'yes');
+  } catch {
+    return false;
+  }
+}
+
+app.get('/api/vm-sessions', async (_req, res) => {
+  try {
+    const rawList = await execFileAsync('ssh', ['exe.dev', 'ls']);
+    const vmNames = parseVmNamesFromExeList(rawList);
+    const sessions = await Promise.all(vmNames.map(async (name) => {
+      const url = `https://${name}.exe.xyz:${PORT}/`;
+      const hasVoiceTerminal = await vmHasVoiceTerminal(`${name}.exe.xyz`);
+      return { name, url, hasVoiceTerminal };
+    }));
+    res.json(sessions);
+  } catch (err) {
+    res.status(500).json({
+      error: err.message || 'Failed to list VM sessions'
+    });
+  }
+});
+
 app.post('/upload', async (req, res) => {
   try {
     const [, files] = await parseMultipartForm(req);

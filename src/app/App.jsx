@@ -61,6 +61,10 @@ export default function App() {
     if (kind === 'claude-sonnet-4-6') return 'Claude Sonnet 4.6';
     return 'Claude Opus 4.6';
   };
+  const formatStatusOrchestratorLabel = (kind) => {
+    if (kind === 'codex') return 'Codex (Spark)';
+    return 'LLM';
+  };
 
   const [messages, setMessages] = useState([]);
   const [streamingMessage, setStreamingMessage] = useState(null);
@@ -70,6 +74,10 @@ export default function App() {
   const [inputText, setInputText] = useState('');
   const [showInput, setShowInput] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showVmSessions, setShowVmSessions] = useState(false);
+  const [vmSessions, setVmSessions] = useState([]);
+  const [vmSessionsLoading, setVmSessionsLoading] = useState(false);
+  const [vmSessionsError, setVmSessionsError] = useState('');
   const [autoSend, setAutoSend] = useState(() => {
     return localStorage.getItem('voice-terminal-auto-send') === '1';
   });
@@ -618,6 +626,32 @@ export default function App() {
     })();
   }, [tts, ws]);
 
+  const fetchVmSessions = useCallback(async () => {
+    setVmSessionsLoading(true);
+    setVmSessions([]);
+    setVmSessionsError('');
+    try {
+      const response = await fetch('/api/vm-sessions');
+      if (!response.ok) {
+        throw new Error(`Request failed (${response.status})`);
+      }
+      const data = await response.json();
+      const sessions = Array.isArray(data) ? data : [];
+      sessions.sort((a, b) => String(a?.name || '').localeCompare(String(b?.name || '')));
+      setVmSessions(sessions);
+    } catch (err) {
+      setVmSessions([]);
+      setVmSessionsError(err?.message || 'Failed to load VM sessions');
+    } finally {
+      setVmSessionsLoading(false);
+    }
+  }, []);
+
+  const openVmSessionsModal = useCallback(() => {
+    setShowVmSessions(true);
+    fetchVmSessions();
+  }, [fetchVmSessions]);
+
   const cancelMessage = useCallback(() => {
     setShowInput(false);
     setInputText('');
@@ -703,38 +737,77 @@ export default function App() {
   }, []);
 
   const handleFileChange = useCallback(async (e) => {
-    const file = e.target.files?.[0];
+    const files = Array.from(e.target.files || []);
     e.target.value = '';
-    if (!file) return;
+    if (files.length === 0) return;
 
-    setUploadState({
-      status: 'uploading',
-      filename: file.name,
-      size: file.size,
-      progress: 0
-    });
+    const successes = [];
+    const failures = [];
 
-    try {
-      const result = await uploadFileWithProgress(file);
+    for (const file of files) {
+      setUploadState({
+        status: 'uploading',
+        filename: file.name,
+        size: file.size,
+        progress: 0
+      });
+
+      try {
+        const result = await uploadFileWithProgress(file);
+        successes.push({
+          filename: result.filename || file.name,
+          size: Number(result.size ?? file.size ?? 0),
+          path: result.path || ''
+        });
+      } catch (err) {
+        const payload = err?.payload || {};
+        failures.push({
+          filename: payload.filename || file.name,
+          size: Number(payload.size ?? file.size ?? 0),
+          path: payload.path || '',
+          saved: !!payload.saved,
+          message: err?.message || 'Upload failed'
+        });
+      }
+    }
+
+    if (failures.length === 0) {
+      const first = successes[0] || {};
       setUploadState({
         status: 'success',
-        filename: result.filename || file.name,
-        size: Number(result.size ?? file.size ?? 0),
-        path: result.path,
-        message: 'Saved and shared with the agent.'
+        filename: successes.length === 1 ? (first.filename || files[0].name) : `${successes.length} files`,
+        size: successes.length === 1 ? Number(first.size || 0) : 0,
+        path: successes.length === 1 ? (first.path || '') : '',
+        message: successes.length === 1
+          ? 'Saved and shared with the agent.'
+          : `Saved and shared ${successes.length} files with the agent.`
       });
-    } catch (err) {
-      const payload = err?.payload || {};
+      return;
+    }
+
+    if (successes.length === 0) {
+      const firstFailed = failures[0];
       setUploadState({
         status: 'error',
-        filename: payload.filename || file.name,
-        size: Number(payload.size ?? file.size ?? 0),
-        path: payload.path || '',
-        message: payload.saved
-          ? `Saved file, but could not notify the agent: ${err.message || 'Upload failed'}`
-          : (err.message || 'Upload failed')
+        filename: failures.length === 1 ? firstFailed.filename : `${failures.length} files`,
+        size: failures.length === 1 ? Number(firstFailed.size || 0) : 0,
+        path: failures.length === 1 ? (firstFailed.path || '') : '',
+        message: failures.length === 1
+          ? (firstFailed.saved
+            ? `Saved file, but could not notify the agent: ${firstFailed.message}`
+            : firstFailed.message)
+          : `Failed to upload ${failures.length} files.`
       });
+      return;
     }
+
+    setUploadState({
+      status: 'error',
+      filename: `${successes.length + failures.length} files`,
+      size: 0,
+      path: '',
+      message: `Uploaded ${successes.length} file${successes.length === 1 ? '' : 's'}, failed ${failures.length}.`
+    });
   }, [uploadFileWithProgress]);
 
   // ---- Session controls ----
@@ -896,24 +969,37 @@ export default function App() {
   const isMicInCancelMode = isProcessing || tts.isSpeaking;
   const micStatusText = tts.isSpeaking ? 'Speaking...' : liveText;
   const isUploading = uploadState?.status === 'uploading';
+  const visibleVmSessions = vmSessions.filter((session) => session?.hasVoiceTerminal);
 
   return (
     <div className="h-dvh flex flex-col bg-slate-950 text-slate-100">
-      <button
-        onClick={() => setShowSettings(true)}
-        className="absolute top-2 right-3 z-30 w-9 h-9 rounded-md bg-slate-800/85 text-slate-300 border border-slate-600/50 hover:bg-slate-700 hover:text-white transition-colors flex items-center justify-center"
-        title="Open settings"
-      >
-        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M4 6h16v2H4V6zm0 5h16v2H4v-2zm0 5h16v2H4v-2z" />
-        </svg>
-      </button>
+      <div className="absolute top-2 right-3 z-30 flex items-center gap-2">
+        <button
+          onClick={openVmSessionsModal}
+          className="w-9 h-9 rounded-md bg-slate-800/85 text-slate-300 border border-slate-600/50 hover:bg-slate-700 hover:text-white transition-colors flex items-center justify-center"
+          title="Switch VM session"
+        >
+          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M3 3h8v8H3V3zm10 0h8v8h-8V3zM3 13h8v8H3v-8zm10 0h8v8h-8v-8z" />
+          </svg>
+        </button>
+
+        <button
+          onClick={() => setShowSettings(true)}
+          className="w-9 h-9 rounded-md bg-slate-800/85 text-slate-300 border border-slate-600/50 hover:bg-slate-700 hover:text-white transition-colors flex items-center justify-center"
+          title="Open settings"
+        >
+          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M4 6h16v2H4V6zm0 5h16v2H4v-2zm0 5h16v2H4v-2z" />
+          </svg>
+        </button>
+      </div>
 
       <div className="relative z-20 flex items-center justify-center border-b border-slate-800/80 bg-slate-900/90 backdrop-blur-sm">
         <Controls
           isConnected={ws.isConnected}
           sessionRunning={ws.sessionRunning}
-          orchestratorLabel={formatOrchestratorLabel(ws.orchestrator || selectedOrchestrator)}
+          orchestratorLabel={formatStatusOrchestratorLabel(ws.orchestrator || selectedOrchestrator)}
           audioEnabled={ttsEnabled}
           audioUnlocked={tts.isAudioUnlocked}
         />
@@ -1050,7 +1136,7 @@ export default function App() {
             ref={fileInputRef}
             id="file-upload-input"
             type="file"
-            accept="image/*,video/*,application/pdf"
+            multiple
             onChange={handleFileChange}
             className="hidden"
           />
@@ -1155,6 +1241,78 @@ export default function App() {
         onRestartSession={restartSession}
         onClose={() => setShowSettings(false)}
       />
+
+      {showVmSessions && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm" onClick={() => setShowVmSessions(false)}>
+          <div className="absolute inset-0 flex items-center justify-center p-4 pointer-events-none">
+            <div
+              className="w-full max-w-md rounded-2xl border border-slate-700 bg-slate-900/95 shadow-2xl pointer-events-auto"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="px-5 py-4 border-b border-slate-800 flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-base font-semibold text-slate-100">VM Sessions</div>
+                  <div className="text-xs text-slate-400 mt-1">Jump to another voice-terminal VM.</div>
+                </div>
+                <button
+                  onClick={() => setShowVmSessions(false)}
+                  className="w-8 h-8 rounded-md bg-slate-800/80 border border-slate-700 text-slate-300 hover:bg-slate-700 hover:text-white transition-colors"
+                  title="Close VM sessions"
+                >
+                  <svg className="w-4 h-4 mx-auto" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                    <path d="M18 6 6 18M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              <div className="p-4 space-y-3 max-h-[60vh] overflow-auto">
+                {vmSessionsLoading && (
+                  <div className="text-sm text-slate-300">Loading VM sessions...</div>
+                )}
+
+                {!vmSessionsLoading && vmSessionsError && (
+                  <div className="rounded-lg border border-rose-600/40 bg-rose-950/40 px-3 py-2 text-sm text-rose-100">
+                    {vmSessionsError}
+                  </div>
+                )}
+
+                {!vmSessionsLoading && !vmSessionsError && visibleVmSessions.length === 0 && (
+                  <div className="rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 text-sm text-slate-300">
+                    No VMs with voice-terminal detected.
+                  </div>
+                )}
+
+                {!vmSessionsLoading && !vmSessionsError && visibleVmSessions.map((session) => (
+                  <button
+                    key={session.name}
+                    onClick={() => {
+                      window.location.href = session.url;
+                    }}
+                    className="w-full text-left rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 hover:bg-slate-800 transition-colors"
+                  >
+                    <div className="text-sm font-medium text-slate-100">{session.name}</div>
+                    <div className="text-xs text-cyan-300 mt-0.5">{session.url}</div>
+                  </button>
+                ))}
+              </div>
+
+              <div className="px-4 pb-4">
+                <button
+                  onClick={fetchVmSessions}
+                  disabled={vmSessionsLoading}
+                  className={`w-full px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                    vmSessionsLoading
+                      ? 'bg-slate-900 border-slate-800 text-slate-500'
+                      : 'bg-slate-700/70 border-slate-500/50 text-slate-100 hover:bg-slate-600/80'
+                  }`}
+                >
+                  Refresh VM list
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
