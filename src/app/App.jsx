@@ -744,26 +744,14 @@ export default function App() {
     }
   }, [fetchVmSessions]);
 
+  const checkUpdates = useCallback(async () => {
+    await Promise.all([fetchVmSessions(), checkVmUpdates()]);
+  }, [fetchVmSessions, checkVmUpdates]);
+
   const cancelMessage = useCallback(() => {
     setShowInput(false);
     setInputText('');
     setLiveText('');
-  }, []);
-
-  const handleUploadFiles = useCallback((files) => {
-    const list = Array.isArray(files) ? files : Array.from(files || []);
-    if (list.length === 0) return;
-
-    const attachmentLines = list.map((file) => `- ${file.name}`);
-    const attachmentBlock = `Attached files:\n${attachmentLines.join('\n')}`;
-
-    setInputText((prev) => {
-      const current = String(prev || '').trim();
-      if (!current) return attachmentBlock;
-      return `${current}\n\n${attachmentBlock}`;
-    });
-    setShowInput(true);
-    setLiveText(`Added ${list.length} file${list.length === 1 ? '' : 's'} to message`);
   }, []);
 
   const cancelProcessing = useCallback(() => {
@@ -1065,7 +1053,7 @@ export default function App() {
 
   return (
     <div className="h-dvh flex flex-col bg-slate-950 text-slate-100">
-      <div className="absolute top-2 right-3 z-30 flex items-center gap-2">
+      <div className="absolute top-2 left-3 z-30 flex items-center gap-2">
         <button
           onClick={openVmSessionsModal}
           className="w-9 h-9 rounded-md bg-slate-800/85 text-slate-300 border border-slate-600/50 hover:bg-slate-700 hover:text-white transition-colors flex items-center justify-center"
@@ -1076,6 +1064,9 @@ export default function App() {
           </svg>
         </button>
 
+      </div>
+
+      <div className="absolute top-2 right-3 z-30 flex items-center gap-2">
         <button
           onClick={() => setShowSettings(true)}
           className="w-9 h-9 rounded-md bg-slate-800/85 text-slate-300 border border-slate-600/50 hover:bg-slate-700 hover:text-white transition-colors flex items-center justify-center"
@@ -1220,7 +1211,6 @@ export default function App() {
             onChange={setInputText}
             onSend={sendMessage}
             onCancel={cancelMessage}
-            onUploadFiles={handleUploadFiles}
             visible={showInput}
           />
 
@@ -1408,28 +1398,17 @@ export default function App() {
                 ))}
               </div>
 
-              <div className="px-4 pb-4 grid grid-cols-3 gap-2">
+              <div className="px-4 pb-4 grid grid-cols-2 gap-2">
                 <button
-                  onClick={fetchVmSessions}
-                  disabled={vmSessionsLoading}
+                  onClick={checkUpdates}
+                  disabled={vmSessionsLoading || vmUpdatesLoading || vmUpdateAllLoading}
                   className={`w-full px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
-                    vmSessionsLoading
-                      ? 'bg-slate-900 border-slate-800 text-slate-500'
-                      : 'bg-slate-700/70 border-slate-500/50 text-slate-100 hover:bg-slate-600/80'
-                  }`}
-                >
-                  Refresh VM list
-                </button>
-                <button
-                  onClick={checkVmUpdates}
-                  disabled={vmUpdatesLoading || vmUpdateAllLoading || vmSessionsLoading || visibleVmSessions.length === 0}
-                  className={`w-full px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
-                    (vmUpdatesLoading || vmUpdateAllLoading || vmSessionsLoading || visibleVmSessions.length === 0)
+                    (vmSessionsLoading || vmUpdatesLoading || vmUpdateAllLoading)
                       ? 'bg-slate-900 border-slate-800 text-slate-500'
                       : 'bg-cyan-700/50 border-cyan-500/40 text-cyan-100 hover:bg-cyan-600/60'
                   }`}
                 >
-                  {vmUpdatesLoading ? 'Checking...' : 'Updates'}
+                  {(vmSessionsLoading || vmUpdatesLoading) ? 'Checking...' : 'Check Updates'}
                 </button>
                 <button
                   onClick={runUpdateAll}
