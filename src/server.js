@@ -164,7 +164,11 @@ function execFileAsync(command, args) {
 
 function execFileDetailed(command, args) {
   return new Promise((resolve) => {
-    execFile(command, args, { encoding: 'utf8' }, (error, stdout, stderr) => {
+    execFile(command, args, {
+      encoding: 'utf8',
+      maxBuffer: 20 * 1024 * 1024,
+      timeout: 30 * 60 * 1000
+    }, (error, stdout, stderr) => {
       resolve({
         ok: !error,
         stdout: String(stdout || '').trim(),

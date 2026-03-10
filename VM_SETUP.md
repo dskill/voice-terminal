@@ -1,115 +1,31 @@
-# New VM Setup Guide
+# New VM Setup
 
-This guide covers setting up a fresh exe.dev VM with the voice terminal app and all required tools authenticated.
-
-## 0. Add New VM to Known Hosts (from source VM)
-
-Before you can SSH or SCP to the new VM, add its host key:
+Use the setup CLI to provision a fresh exe.dev VM in one command:
 
 ```bash
-ssh-keyscan -H <newvm>.exe.xyz >> ~/.ssh/known_hosts
+node bin/vm-setup.js <hostname>
+# Example:
+node bin/vm-setup.js myvm.exe.xyz
 ```
 
-## 1. Transfer Credentials from an Existing VM
+Run this **from an already-configured VM** that has credentials and Piper models. The script will:
 
-Do this before cloning, so `gh` is authenticated. Run these commands **from the source VM**, pushing credentials to the new VM:
+1. Ensure credential directories exist on the target VM
+2. Copy credentials (Claude, Codex, GitHub CLI)
+3. Clone or hard-reset the `voice-terminal` repo
+4. Install Node.js and npm (via apt if not present)
+5. Install npm dependencies
+6. Create Python venv and install STT (faster-whisper) requirements
+7. Update Claude Code (`claude update`)
+8. Install latest Codex via npm (removes native binary if present)
+9. Provision Piper TTS models (copies from source VM if available, otherwise downloads from HuggingFace)
+10. Build the frontend (`npm run build`)
+11. Start the `voice-terminal` tmux session
 
-```bash
-# Create necessary dirs on new VM
-ssh <newvm>.exe.xyz 'mkdir -p ~/.claude ~/.codex ~/.config/gh'
+Once complete, access the app at `https://<hostname>:3456/`.
 
-# Push credentials
-scp ~/.claude/.credentials.json <newvm>.exe.xyz:~/.claude/.credentials.json
-scp ~/.codex/auth.json <newvm>.exe.xyz:~/.codex/auth.json
-scp ~/.config/gh/hosts.yml <newvm>.exe.xyz:~/.config/gh/hosts.yml
-```
+## Notes
 
-## 2. Clone the Repository
-
-```bash
-git clone https://github.com/dskill/voice-terminal.git
-cd voice-terminal
-```
-
-## 3. Install Node.js and npm (if not present)
-
-exe.dev VMs may not have Node.js pre-installed. Check first:
-
-```bash
-npm --version || sudo apt-get install -y nodejs npm
-```
-
-## 4. Install Node Dependencies and Python Environment
-
-```bash
-npm install
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -r requirements-stt.txt
-```
-
-## 5. Update Claude Code and Codex to Latest
-
-### Claude Code
-
-```bash
-claude update
-```
-
-### Codex
-
-Codex may already be pre-installed as a binary at `/usr/local/bin/codex`. Check first:
-
-```bash
-which codex && codex --version
-```
-
-If not installed, install via npm (requires sudo):
-
-```bash
-sudo npm install -g @openai/codex
-```
-
-Note: If a native binary install of Codex exists at `/usr/local/bin/codex`, `sudo npm install -g` will fail. Remove it first, then install via npm to get the latest version:
-
-```bash
-sudo rm /usr/local/bin/codex
-sudo npm install -g @openai/codex
-```
-
-## 6. Set Up Piper TTS
-
-Piper TTS is disabled unless `PIPER_MODEL` points to a local `.onnx` voice model. The recommended model is **`en_US-lessac-medium`** — it is the best-sounding voice for this application.
-
-### Option A: Copy from an existing VM (fastest)
-
-```bash
-# Run from the source VM
-ssh <newvm>.exe.xyz 'mkdir -p ~/voice-terminal/models/piper'
-scp ~/voice-terminal/models/piper/en_US-lessac-medium.onnx <newvm>.exe.xyz:~/voice-terminal/models/piper/
-scp ~/voice-terminal/models/piper/en_US-lessac-medium.onnx.json <newvm>.exe.xyz:~/voice-terminal/models/piper/
-```
-
-### Option B: Download from Hugging Face
-
-```bash
-mkdir -p ~/voice-terminal/models/piper
-cd ~/voice-terminal/models/piper
-wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx
-wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json
-```
-
-## 7. Start the Voice Terminal
-
-Start with `PIPER_MODEL` and `PIPER_MODEL_CONFIG` set so TTS is enabled:
-
-```bash
-tmux new-session -d -s voice-terminal -c ~/voice-terminal \
-  'PIPER_MODEL=$HOME/voice-terminal/models/piper/en_US-lessac-medium.onnx \
-   PIPER_MODEL_CONFIG=$HOME/voice-terminal/models/piper/en_US-lessac-medium.onnx.json \
-   . .venv/bin/activate && npm start'
-```
-
-Access at `https://your-vm.exe.xyz:3456/`
-
-See the main README for full usage, restart, and troubleshooting instructions.
+- SSH host keys are accepted automatically (`StrictHostKeyChecking=accept-new`), so no manual `ssh-keyscan` needed.
+- Steps run sequentially and stop on first failure. Check the summary output for details.
+- To restart just the app later: `tmux kill-session -t voice-terminal` then re-run step 11's command (see README).
