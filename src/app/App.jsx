@@ -744,10 +744,6 @@ export default function App() {
     }
   }, [fetchVmSessions]);
 
-  const checkUpdates = useCallback(async () => {
-    await Promise.all([fetchVmSessions(), checkVmUpdates()]);
-  }, [fetchVmSessions, checkVmUpdates]);
-
   const cancelMessage = useCallback(() => {
     setShowInput(false);
     setInputText('');
@@ -1398,17 +1394,28 @@ export default function App() {
                 ))}
               </div>
 
-              <div className="px-4 pb-4 grid grid-cols-2 gap-2">
+              <div className="px-4 pb-4 grid grid-cols-3 gap-2">
                 <button
-                  onClick={checkUpdates}
-                  disabled={vmSessionsLoading || vmUpdatesLoading || vmUpdateAllLoading}
+                  onClick={fetchVmSessions}
+                  disabled={vmSessionsLoading}
                   className={`w-full px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
-                    (vmSessionsLoading || vmUpdatesLoading || vmUpdateAllLoading)
+                    vmSessionsLoading
+                      ? 'bg-slate-900 border-slate-800 text-slate-500'
+                      : 'bg-slate-700/70 border-slate-500/50 text-slate-100 hover:bg-slate-600/80'
+                  }`}
+                >
+                  Refresh
+                </button>
+                <button
+                  onClick={checkVmUpdates}
+                  disabled={vmUpdatesLoading || vmUpdateAllLoading || vmSessionsLoading || visibleVmSessions.length === 0}
+                  className={`w-full px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                    (vmUpdatesLoading || vmUpdateAllLoading || vmSessionsLoading || visibleVmSessions.length === 0)
                       ? 'bg-slate-900 border-slate-800 text-slate-500'
                       : 'bg-cyan-700/50 border-cyan-500/40 text-cyan-100 hover:bg-cyan-600/60'
                   }`}
                 >
-                  {(vmSessionsLoading || vmUpdatesLoading) ? 'Checking...' : 'Check Updates'}
+                  {vmUpdatesLoading ? 'Checking...' : 'Check Updates'}
                 </button>
                 <button
                   onClick={runUpdateAll}
