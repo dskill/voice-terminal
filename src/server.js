@@ -175,6 +175,59 @@ function execFileDetailed(command, args) {
         stderr: String(stderr || '').trim(),
         error: error ? (error.message || 'command failed') : ''
       });
+      });
+  });
+}
+
+function execFileStreamed(command, args, onLine) {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, {
+      encoding: 'utf8'
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    const stdoutInterface = createInterface({ input: child.stdout });
+    const stderrInterface = createInterface({ input: child.stderr });
+
+    function handleLine(raw, stream) {
+      const trimmed = String(raw || '').replace(/\r$/, '').trimEnd();
+      if (!trimmed) return;
+      if (stream === 'stderr') {
+        stderr += `${trimmed}\n`;
+      } else {
+        stdout += `${trimmed}\n`;
+      }
+      if (typeof onLine === 'function') {
+        onLine({ stream, line: trimmed });
+      }
+    }
+
+    stdoutInterface.on('line', (line) => {
+      handleLine(line, 'stdout');
+    });
+
+    stderrInterface.on('line', (line) => {
+      handleLine(line, 'stderr');
+    });
+
+    child.on('error', (error) => {
+      resolve({
+        ok: false,
+        stdout: stdout.trim(),
+        stderr: stderr.trim(),
+        error: error.message || 'command failed to start'
+      });
+    });
+
+    child.on('close', (code) => {
+      resolve({
+        ok: code === 0,
+        stdout: stdout.trim(),
+        stderr: stderr.trim(),
+        error: code === 0 ? '' : (stderr.trim() || `Command exited with code ${code}`)
+      });
     });
   });
 }
@@ -1261,15 +1314,15 @@ async function readVmUpdateStatus(hostname) {
   }
 }
 
-async function updateAllOnVm(hostname) {
-  const result = await execFileDetailed('node', [join(__dirname, '../bin/vm-setup.js'), hostname]);
-
-  const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
-  return {
-    success: result.ok,
-    error: result.ok ? '' : (result.stderr || result.error || 'update failed'),
-    output
-  };
+function updateAllOnVm(hostname, onLine) {
+  return execFileStreamed('node', [join(__dirname, '../bin/vm-setup.js'), hostname], onLine).then((result) => {
+    const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
+    return {
+      success: result.ok,
+      error: result.ok ? '' : (result.stderr || result.error || 'update failed'),
+      output
+    };
+  });
 }
 
 app.get('/api/vm-sessions', async (_req, res) => {
@@ -1318,6 +1371,7 @@ app.get('/api/vm-sessions/updates', async (_req, res) => {
 });
 
 app.post('/api/vm-sessions/update-all', async (_req, res) => {
+  const runId = String(_req?.query?.runId || _req?.body?.runId || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   try {
     const rawList = await execFileAsync('ssh', ['exe.dev', 'ls']);
     const vmNames = parseVmNamesFromExeList(rawList);
@@ -1328,10 +1382,66 @@ app.post('/api/vm-sessions/update-all', async (_req, res) => {
     }));
 
     const installed = sessions.filter((session) => session.hasVoiceTerminal);
-    const updated = await Promise.all(installed.map(async (session) => ({
-      name: session.name,
-      result: await updateAllOnVm(`${session.name}.exe.xyz`)
-    })));
+    const updated = [];
+    const totalSessions = installed.length;
+
+    broadcastToClients({
+      type: 'vm-update-progress',
+      runId,
+      phase: 'start',
+      totalSessions,
+      completedSessions: 0,
+      message: `Starting update all run for ${totalSessions} VM(s) with Voice Boss.`
+    });
+
+    for (let index = 0; index < installed.length; index += 1) {
+      const session = installed[index];
+      broadcastToClients({
+        type: 'vm-update-progress',
+        runId,
+        phase: 'session-start',
+        sessionName: session.name,
+        totalSessions,
+        currentIndex: index + 1,
+        completedSessions: updated.length,
+        message: `Starting update for ${session.name}`
+      });
+
+      const result = await updateAllOnVm(`${session.name}.exe.xyz`, (payload) => {
+        broadcastToClients({
+          type: 'vm-update-progress',
+          runId,
+          phase: 'session-log',
+          sessionName: session.name,
+          stream: payload.stream,
+          line: payload.line
+        });
+      });
+
+      updated.push({ name: session.name, result });
+      broadcastToClients({
+        type: 'vm-update-progress',
+        runId,
+        phase: 'session-complete',
+        sessionName: session.name,
+        totalSessions,
+        currentIndex: index + 1,
+        completedSessions: updated.length,
+        message: result.success ? 'Update completed' : (result.error || 'Update failed'),
+        success: !!result.success,
+        error: result.success ? '' : (result.error || 'update failed')
+      });
+    }
+
+    broadcastToClients({
+      type: 'vm-update-progress',
+      runId,
+      phase: 'complete',
+      totalSessions,
+      completedSessions: updated.length,
+      message: `Update all complete for ${totalSessions} VM(s).`
+    });
+
     const resultByName = Object.fromEntries(updated.map((entry) => [entry.name, entry.result]));
 
     res.json(sessions.map((session) => ({
@@ -1339,6 +1449,12 @@ app.post('/api/vm-sessions/update-all', async (_req, res) => {
       updateAll: session.hasVoiceTerminal ? (resultByName[session.name] || null) : null
     })));
   } catch (err) {
+    broadcastToClients({
+      type: 'vm-update-progress',
+      runId,
+      phase: 'error',
+      message: err.message || 'Failed to update VM sessions'
+    });
     res.status(500).json({
       error: err.message || 'Failed to update VM sessions'
     });

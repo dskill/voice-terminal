@@ -87,6 +87,12 @@ function vmUpdateAllTone(result) {
 }
 
 const VOICE_BOSS_URL = 'https://voiceboss.exe.xyz:3456/';
+const VM_UPDATE_LOG_LIMIT = 400;
+
+function createRunId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 export default function App() {
   const ORCHESTRATOR_OPTIONS = [
@@ -122,6 +128,15 @@ export default function App() {
   const [vmUpdateAllByName, setVmUpdateAllByName] = useState({});
   const [vmUpdateAllLoading, setVmUpdateAllLoading] = useState(false);
   const [vmUpdateAllError, setVmUpdateAllError] = useState('');
+  const [vmUpdateRunState, setVmUpdateRunState] = useState({
+    runId: '',
+    phase: 'idle',
+    message: '',
+    totalSessions: 0,
+    completedSessions: 0,
+    currentSession: '',
+    logs: []
+  });
   const [autoSend, setAutoSend] = useState(() => {
     return localStorage.getItem('voice-terminal-auto-send') === '1';
   });
@@ -168,6 +183,7 @@ export default function App() {
   const prevIsSpeakingRef = useRef(false);
   const wakeLockRef = useRef(null);
   const recordingControlsRef = useRef(null);
+  const vmUpdateRunIdRef = useRef('');
 
   // ---- WebSocket message handlers ----
 
@@ -462,6 +478,49 @@ export default function App() {
     ws.setHandler('history-cleared', () => {
       // handled by local state clear
     });
+
+    ws.setHandler('vm-update-progress', (data) => {
+      const incomingRunId = String(data?.runId || '');
+      if (!incomingRunId || incomingRunId !== vmUpdateRunIdRef.current) return;
+
+      setVmUpdateRunState((prev) => {
+        const next = {
+          ...prev,
+          runId: incomingRunId,
+          phase: data?.phase || prev.phase,
+          message: data?.message || prev.message,
+          totalSessions: Number.isFinite(Number(data?.totalSessions))
+            ? Number(data.totalSessions)
+            : prev.totalSessions,
+          completedSessions: Number.isFinite(Number(data?.completedSessions))
+            ? Number(data.completedSessions)
+            : prev.completedSessions,
+          currentSession: data?.sessionName || prev.currentSession
+        };
+
+        if (data?.phase === 'session-log' && typeof data?.line === 'string') {
+          const streamTag = data?.stream === 'stderr' ? 'stderr' : 'stdout';
+          const sessionLabel = data?.sessionName || next.currentSession || 'vm';
+          const line = `[${sessionLabel}/${streamTag}] ${data.line}`;
+          next.logs = [...(Array.isArray(prev.logs) ? prev.logs : []), line].slice(-VM_UPDATE_LOG_LIMIT);
+        } else if (data?.phase === 'session-start') {
+          const line = `==> ${data?.sessionName || 'vm'}: update started`;
+          next.logs = [...(Array.isArray(prev.logs) ? prev.logs : []), line].slice(-VM_UPDATE_LOG_LIMIT);
+        } else if (data?.phase === 'session-complete') {
+          const outcome = data?.success ? 'success' : 'failed';
+          const extra = data?.error ? ` (${data.error})` : '';
+          const line = `==> ${data?.sessionName || 'vm'}: update ${outcome}${extra}`;
+          next.logs = [...(Array.isArray(prev.logs) ? prev.logs : []), line].slice(-VM_UPDATE_LOG_LIMIT);
+        } else if (data?.phase === 'error') {
+          const line = `Update all failed: ${data?.message || 'unknown error'}`;
+          next.logs = [...(Array.isArray(prev.logs) ? prev.logs : []), line].slice(-VM_UPDATE_LOG_LIMIT);
+        } else {
+          next.logs = prev.logs;
+        }
+
+        return next;
+      });
+    });
   }, [
     ws.setHandler,
     ws.listTmuxSessions,
@@ -722,11 +781,22 @@ export default function App() {
   }, []);
 
   const runUpdateAll = useCallback(async () => {
+    const runId = createRunId();
+    vmUpdateRunIdRef.current = runId;
     setVmUpdateAllLoading(true);
     setVmUpdateAllError('');
     setVmUpdateAllByName({});
+    setVmUpdateRunState({
+      runId,
+      phase: 'start',
+      message: 'Starting update all run...',
+      totalSessions: 0,
+      completedSessions: 0,
+      currentSession: '',
+      logs: [`[run ${runId}] starting update-all...`]
+    });
     try {
-      const response = await fetch('/api/vm-sessions/update-all', { method: 'POST' });
+      const response = await fetch(`/api/vm-sessions/update-all?runId=${encodeURIComponent(runId)}`, { method: 'POST' });
       if (!response.ok) {
         throw new Error(`Request failed (${response.status})`);
       }
@@ -741,6 +811,12 @@ export default function App() {
       fetchVmSessions();
     } catch (err) {
       setVmUpdateAllError(err?.message || 'Failed to run update-all');
+      setVmUpdateRunState((prev) => ({
+        ...prev,
+        phase: 'error',
+        message: err?.message || 'Failed to run update-all',
+        logs: [...(Array.isArray(prev.logs) ? prev.logs : []), `Update all failed: ${err?.message || 'unknown error'}`].slice(-VM_UPDATE_LOG_LIMIT)
+      }));
     } finally {
       setVmUpdateAllLoading(false);
     }
@@ -1049,6 +1125,15 @@ export default function App() {
   const isUploading = uploadState?.status === 'uploading';
   const visibleVmSessions = vmSessions.filter((session) => session?.hasVoiceTerminal);
   const isRestrictedVmSessionMode = !vmSessionsLoading && !vmSessionsError && visibleVmSessions.length === 0;
+  const vmUpdateProgressTotal = Math.max(0, Number(vmUpdateRunState.totalSessions || 0));
+  const vmUpdateProgressCompleted = Math.max(0, Number(vmUpdateRunState.completedSessions || 0));
+  const vmUpdateProgressPct = vmUpdateProgressTotal > 0
+    ? Math.max(0, Math.min(100, Math.round((vmUpdateProgressCompleted / vmUpdateProgressTotal) * 100)))
+    : (vmUpdateAllLoading ? 8 : 0);
+  const showVmUpdateProgressPanel = vmUpdateAllLoading
+    || vmUpdateRunState.phase === 'complete'
+    || vmUpdateRunState.phase === 'error'
+    || (Array.isArray(vmUpdateRunState.logs) && vmUpdateRunState.logs.length > 0);
 
   return (
     <div className="h-dvh flex flex-col bg-slate-950 text-slate-100">
@@ -1395,6 +1480,43 @@ export default function App() {
                     )}
                   </button>
                 ))}
+
+                {showVmUpdateProgressPanel && (
+                  <div className="rounded-lg border border-cyan-500/30 bg-slate-900/80 px-3 py-3">
+                    <div className="flex items-center justify-between text-xs text-slate-300">
+                      <span>
+                        {vmUpdateRunState.phase === 'complete'
+                          ? 'Update all complete'
+                          : vmUpdateRunState.phase === 'error'
+                            ? 'Update all failed'
+                            : 'Update all in progress'}
+                      </span>
+                      <span>
+                        {vmUpdateProgressTotal > 0
+                          ? `${vmUpdateProgressCompleted}/${vmUpdateProgressTotal}`
+                          : (vmUpdateAllLoading ? 'running' : 'idle')}
+                      </span>
+                    </div>
+                    <div className="mt-2 h-2 rounded-full bg-slate-800 overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-[width] duration-200 ${
+                          vmUpdateRunState.phase === 'error' ? 'bg-rose-400' : 'bg-cyan-400'
+                        }`}
+                        style={{ width: `${vmUpdateProgressPct}%` }}
+                      />
+                    </div>
+                    <div className="mt-2 text-[11px] text-slate-400">
+                      {vmUpdateRunState.message || (vmUpdateAllLoading ? 'Updating VMs...' : 'Waiting for update status')}
+                    </div>
+                    <div className="mt-2 rounded-md border border-slate-700 bg-slate-950/70 p-2 max-h-36 overflow-auto">
+                      <pre className="text-[10px] leading-4 text-slate-300 whitespace-pre-wrap break-words">
+                        {(vmUpdateRunState.logs || []).length > 0
+                          ? vmUpdateRunState.logs.join('\n')
+                          : 'No output yet.'}
+                      </pre>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {isRestrictedVmSessionMode ? (
