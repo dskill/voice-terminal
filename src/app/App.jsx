@@ -1046,6 +1046,7 @@ export default function App() {
   const micStatusText = tts.isSpeaking ? 'Speaking...' : liveText;
   const isUploading = uploadState?.status === 'uploading';
   const visibleVmSessions = vmSessions.filter((session) => session?.hasVoiceTerminal);
+  const isRestrictedVmSessionMode = !vmSessionsLoading && !vmSessionsError && visibleVmSessions.length === 0;
 
   return (
     <div className="h-dvh flex flex-col bg-slate-950 text-slate-100">
@@ -1394,41 +1395,58 @@ export default function App() {
                 ))}
               </div>
 
-              <div className="px-4 pb-4 grid grid-cols-3 gap-2">
-                <button
-                  onClick={fetchVmSessions}
-                  disabled={vmSessionsLoading}
-                  className={`w-full px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
-                    vmSessionsLoading
-                      ? 'bg-slate-900 border-slate-800 text-slate-500'
-                      : 'bg-slate-700/70 border-slate-500/50 text-slate-100 hover:bg-slate-600/80'
-                  }`}
-                >
-                  Refresh
-                </button>
-                <button
-                  onClick={checkVmUpdates}
-                  disabled={vmUpdatesLoading || vmUpdateAllLoading || vmSessionsLoading || visibleVmSessions.length === 0}
-                  className={`w-full px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
-                    (vmUpdatesLoading || vmUpdateAllLoading || vmSessionsLoading || visibleVmSessions.length === 0)
-                      ? 'bg-slate-900 border-slate-800 text-slate-500'
-                      : 'bg-cyan-700/50 border-cyan-500/40 text-cyan-100 hover:bg-cyan-600/60'
-                  }`}
-                >
-                  {vmUpdatesLoading ? 'Checking...' : 'Check Updates'}
-                </button>
-                <button
-                  onClick={runUpdateAll}
-                  disabled={vmUpdateAllLoading || vmUpdatesLoading || vmSessionsLoading || visibleVmSessions.length === 0}
-                  className={`w-full px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
-                    (vmUpdateAllLoading || vmUpdatesLoading || vmSessionsLoading || visibleVmSessions.length === 0)
-                      ? 'bg-slate-900 border-slate-800 text-slate-500'
-                      : 'bg-emerald-700/40 border-emerald-500/40 text-emerald-100 hover:bg-emerald-600/50'
-                  }`}
-                >
-                  {vmUpdateAllLoading ? 'Updating...' : 'Update All'}
-                </button>
-              </div>
+              {isRestrictedVmSessionMode ? (
+                <div className="px-4 pb-4">
+                  <a
+                    href="https://voiceboss.exe.xyz:3456/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-block w-full"
+                  >
+                    <button
+                      className="w-full px-3 py-2 rounded-lg text-sm font-medium border border-cyan-500/40 bg-cyan-700/50 text-cyan-100 hover:bg-cyan-600/60 transition-colors"
+                    >
+                      Go to Voice Boss
+                    </button>
+                  </a>
+                </div>
+              ) : (
+                <div className="px-4 pb-4 grid grid-cols-3 gap-2">
+                  <button
+                    onClick={fetchVmSessions}
+                    disabled={vmSessionsLoading}
+                    className={`w-full px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                      vmSessionsLoading
+                        ? 'bg-slate-900 border-slate-800 text-slate-500'
+                        : 'bg-slate-700/70 border-slate-500/50 text-slate-100 hover:bg-slate-600/80'
+                    }`}
+                  >
+                    Refresh
+                  </button>
+                  <button
+                    onClick={checkVmUpdates}
+                    disabled={vmUpdatesLoading || vmUpdateAllLoading || vmSessionsLoading || visibleVmSessions.length === 0}
+                    className={`w-full px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                      (vmUpdatesLoading || vmUpdateAllLoading || vmSessionsLoading || visibleVmSessions.length === 0)
+                        ? 'bg-slate-900 border-slate-800 text-slate-500'
+                        : 'bg-cyan-700/50 border-cyan-500/40 text-cyan-100 hover:bg-cyan-600/60'
+                    }`}
+                  >
+                    {vmUpdatesLoading ? 'Checking...' : 'Check Updates'}
+                  </button>
+                  <button
+                    onClick={runUpdateAll}
+                    disabled={vmUpdateAllLoading || vmUpdatesLoading || vmSessionsLoading || visibleVmSessions.length === 0}
+                    className={`w-full px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                      (vmUpdateAllLoading || vmUpdatesLoading || vmSessionsLoading || visibleVmSessions.length === 0)
+                        ? 'bg-slate-900 border-slate-800 text-slate-500'
+                        : 'bg-emerald-700/40 border-emerald-500/40 text-emerald-100 hover:bg-emerald-600/50'
+                    }`}
+                  >
+                    {vmUpdateAllLoading ? 'Updating...' : 'Update All'}
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>
