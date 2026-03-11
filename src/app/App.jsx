@@ -137,6 +137,7 @@ export default function App() {
     currentSession: '',
     logs: []
   });
+  const [showVmUpdateProgressPanel, setShowVmUpdateProgressPanel] = useState(false);
   const [autoSend, setAutoSend] = useState(() => {
     return localStorage.getItem('voice-terminal-auto-send') === '1';
   });
@@ -489,6 +490,8 @@ export default function App() {
         return;
       }
 
+      setShowVmUpdateProgressPanel(true);
+
       setVmUpdateRunState((prev) => {
         const next = {
           ...prev,
@@ -592,6 +595,12 @@ export default function App() {
       }
     };
   }, [requestWakeLock]);
+
+  useEffect(() => {
+    if (!showVmSessions) {
+      setShowVmUpdateProgressPanel(false);
+    }
+  }, [showVmSessions]);
 
   useEffect(() => {
     return () => {
@@ -789,6 +798,7 @@ export default function App() {
   const runUpdateAll = useCallback(async () => {
     const runId = createRunId();
     vmUpdateRunIdRef.current = runId;
+    setShowVmUpdateProgressPanel(true);
     setVmUpdateAllLoading(true);
     setVmUpdateAllError('');
     setVmUpdateAllByName({});
@@ -816,6 +826,7 @@ export default function App() {
       setVmUpdateAllByName(byName);
       fetchVmSessions();
     } catch (err) {
+      setShowVmUpdateProgressPanel(true);
       setVmUpdateAllError(err?.message || 'Failed to run update-all');
       setVmUpdateRunState((prev) => ({
         ...prev,
@@ -1136,7 +1147,7 @@ export default function App() {
   const vmUpdateProgressPct = vmUpdateProgressTotal > 0
     ? Math.max(0, Math.min(100, Math.round((vmUpdateProgressCompleted / vmUpdateProgressTotal) * 100)))
     : (vmUpdateAllLoading ? 8 : 0);
-  const showVmUpdateProgressPanel = vmUpdateAllLoading
+  const shouldShowVmUpdateProgressPanel = showVmUpdateProgressPanel
     || vmUpdateRunState.phase === 'complete'
     || vmUpdateRunState.phase === 'error'
     || (Array.isArray(vmUpdateRunState.logs) && vmUpdateRunState.logs.length > 0);
@@ -1489,7 +1500,7 @@ export default function App() {
                   ))}
                 </div>
 
-                {showVmUpdateProgressPanel && (
+                {shouldShowVmUpdateProgressPanel && (
                   <div className="rounded-lg border border-cyan-500/30 bg-slate-900/80 px-3 py-3">
                     <div className="flex items-center justify-between text-xs text-slate-300">
                       <span>
