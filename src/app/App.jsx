@@ -86,6 +86,8 @@ function vmUpdateAllTone(result) {
   return result.success ? 'text-emerald-300' : 'text-rose-300';
 }
 
+const VOICE_BOSS_URL = 'https://voiceboss.exe.xyz:3456/';
+
 export default function App() {
   const ORCHESTRATOR_OPTIONS = [
     { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
@@ -1398,16 +1400,10 @@ export default function App() {
               {isRestrictedVmSessionMode ? (
                 <div className="px-4 pb-4">
                   <a
-                    href="https://voiceboss.exe.xyz:3456/"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-block w-full"
+                    href={VOICE_BOSS_URL}
+                    className="w-full inline-flex items-center justify-center px-3 py-2 rounded-lg text-sm font-medium border border-cyan-500/40 bg-cyan-700/50 text-cyan-100 hover:bg-cyan-600/60 transition-colors"
                   >
-                    <button
-                      className="w-full px-3 py-2 rounded-lg text-sm font-medium border border-cyan-500/40 bg-cyan-700/50 text-cyan-100 hover:bg-cyan-600/60 transition-colors"
-                    >
-                      Go to Voice Boss
-                    </button>
+                    Go to Voice Boss
                   </a>
                 </div>
               ) : (
