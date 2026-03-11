@@ -480,8 +480,14 @@ export default function App() {
     });
 
     ws.setHandler('vm-update-progress', (data) => {
-      const incomingRunId = String(data?.runId || '');
-      if (!incomingRunId || incomingRunId !== vmUpdateRunIdRef.current) return;
+      if (!data || !data.runId) return;
+
+      const incomingRunId = String(data.runId || '').trim();
+      if (!incomingRunId) return;
+
+      if (vmUpdateRunIdRef.current && incomingRunId !== vmUpdateRunIdRef.current) {
+        return;
+      }
 
       setVmUpdateRunState((prev) => {
         const next = {
@@ -1431,55 +1437,57 @@ export default function App() {
                 </button>
               </div>
 
-              <div className="p-4 space-y-3 max-h-[60vh] overflow-auto">
-                {vmSessionsLoading && (
-                  <div className="text-sm text-slate-300">Loading VM sessions...</div>
-                )}
+              <div className="p-4 flex flex-col space-y-3 max-h-[60vh]">
+                <div className="space-y-3 min-h-0 overflow-auto flex-1">
+                  {vmSessionsLoading && (
+                    <div className="text-sm text-slate-300">Loading VM sessions...</div>
+                  )}
 
-                {!vmSessionsLoading && vmSessionsError && (
-                  <div className="rounded-lg border border-rose-600/40 bg-rose-950/40 px-3 py-2 text-sm text-rose-100">
-                    {vmSessionsError}
-                  </div>
-                )}
-
-                {!vmSessionsLoading && !vmSessionsError && vmUpdatesError && (
-                  <div className="rounded-lg border border-rose-600/40 bg-rose-950/40 px-3 py-2 text-sm text-rose-100">
-                    {vmUpdatesError}
-                  </div>
-                )}
-
-                {!vmSessionsLoading && !vmSessionsError && vmUpdateAllError && (
-                  <div className="rounded-lg border border-rose-600/40 bg-rose-950/40 px-3 py-2 text-sm text-rose-100">
-                    {vmUpdateAllError}
-                  </div>
-                )}
-
-                {!vmSessionsLoading && !vmSessionsError && visibleVmSessions.length === 0 && (
-                  <div className="rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 text-sm text-slate-300">
-                    No VMs with voice-terminal detected.
-                  </div>
-                )}
-
-                {!vmSessionsLoading && !vmSessionsError && visibleVmSessions.map((session) => (
-                  <button
-                    key={session.name}
-                    onClick={() => {
-                      window.location.href = session.url;
-                    }}
-                    className="w-full text-left rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 hover:bg-slate-800 transition-colors"
-                  >
-                    <div className="text-sm font-medium text-slate-100">{session.name}</div>
-                    <div className="text-xs text-cyan-300 mt-0.5">{session.url}</div>
-                    <div className={`text-[11px] mt-1 ${vmUpdateTone(vmUpdatesByName[session.name])}`}>
-                      {formatVmUpdateSummary(vmUpdatesByName[session.name])}
+                  {!vmSessionsLoading && vmSessionsError && (
+                    <div className="rounded-lg border border-rose-600/40 bg-rose-950/40 px-3 py-2 text-sm text-rose-100">
+                      {vmSessionsError}
                     </div>
-                    {vmUpdateAllByName[session.name] && (
-                      <div className={`text-[11px] mt-1 ${vmUpdateAllTone(vmUpdateAllByName[session.name])}`}>
-                        {formatVmUpdateAllSummary(vmUpdateAllByName[session.name])}
+                  )}
+
+                  {!vmSessionsLoading && !vmSessionsError && vmUpdatesError && (
+                    <div className="rounded-lg border border-rose-600/40 bg-rose-950/40 px-3 py-2 text-sm text-rose-100">
+                      {vmUpdatesError}
+                    </div>
+                  )}
+
+                  {!vmSessionsLoading && !vmSessionsError && vmUpdateAllError && (
+                    <div className="rounded-lg border border-rose-600/40 bg-rose-950/40 px-3 py-2 text-sm text-rose-100">
+                      {vmUpdateAllError}
+                    </div>
+                  )}
+
+                  {!vmSessionsLoading && !vmSessionsError && visibleVmSessions.length === 0 && (
+                    <div className="rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 text-sm text-slate-300">
+                      No VMs with voice-terminal detected.
+                    </div>
+                  )}
+
+                  {!vmSessionsLoading && !vmSessionsError && visibleVmSessions.map((session) => (
+                    <button
+                      key={session.name}
+                      onClick={() => {
+                        window.location.href = session.url;
+                      }}
+                      className="w-full text-left rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 hover:bg-slate-800 transition-colors"
+                    >
+                      <div className="text-sm font-medium text-slate-100">{session.name}</div>
+                      <div className="text-xs text-cyan-300 mt-0.5">{session.url}</div>
+                      <div className={`text-[11px] mt-1 ${vmUpdateTone(vmUpdatesByName[session.name])}`}>
+                        {formatVmUpdateSummary(vmUpdatesByName[session.name])}
                       </div>
-                    )}
-                  </button>
-                ))}
+                      {vmUpdateAllByName[session.name] && (
+                        <div className={`text-[11px] mt-1 ${vmUpdateAllTone(vmUpdateAllByName[session.name])}`}>
+                          {formatVmUpdateAllSummary(vmUpdateAllByName[session.name])}
+                        </div>
+                      )}
+                    </button>
+                  ))}
+                </div>
 
                 {showVmUpdateProgressPanel && (
                   <div className="rounded-lg border border-cyan-500/30 bg-slate-900/80 px-3 py-3">
@@ -1517,54 +1525,54 @@ export default function App() {
                     </div>
                   </div>
                 )}
-              </div>
 
-              {isRestrictedVmSessionMode ? (
-                <div className="px-4 pb-4">
-                  <a
-                    href={VOICE_BOSS_URL}
-                    className="w-full inline-flex items-center justify-center px-3 py-2 rounded-lg text-sm font-medium border border-cyan-500/40 bg-cyan-700/50 text-cyan-100 hover:bg-cyan-600/60 transition-colors"
-                  >
-                    Go to Voice Boss
-                  </a>
-                </div>
-              ) : (
-                <div className="px-4 pb-4 grid grid-cols-3 gap-2">
-                  <button
-                    onClick={fetchVmSessions}
-                    disabled={vmSessionsLoading}
-                    className={`w-full px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
-                      vmSessionsLoading
-                        ? 'bg-slate-900 border-slate-800 text-slate-500'
-                        : 'bg-slate-700/70 border-slate-500/50 text-slate-100 hover:bg-slate-600/80'
-                    }`}
-                  >
-                    Refresh
-                  </button>
-                  <button
-                    onClick={checkVmUpdates}
-                    disabled={vmUpdatesLoading || vmUpdateAllLoading || vmSessionsLoading || visibleVmSessions.length === 0}
-                    className={`w-full px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
-                      (vmUpdatesLoading || vmUpdateAllLoading || vmSessionsLoading || visibleVmSessions.length === 0)
-                        ? 'bg-slate-900 border-slate-800 text-slate-500'
-                        : 'bg-cyan-700/50 border-cyan-500/40 text-cyan-100 hover:bg-cyan-600/60'
-                    }`}
-                  >
-                    {vmUpdatesLoading ? 'Checking...' : 'Check Updates'}
-                  </button>
-                  <button
-                    onClick={runUpdateAll}
-                    disabled={vmUpdateAllLoading || vmUpdatesLoading || vmSessionsLoading || visibleVmSessions.length === 0}
-                    className={`w-full px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
-                      (vmUpdateAllLoading || vmUpdatesLoading || vmSessionsLoading || visibleVmSessions.length === 0)
-                        ? 'bg-slate-900 border-slate-800 text-slate-500'
-                        : 'bg-emerald-700/40 border-emerald-500/40 text-emerald-100 hover:bg-emerald-600/50'
-                    }`}
-                  >
-                    {vmUpdateAllLoading ? 'Updating...' : 'Update All'}
-                  </button>
-                </div>
-              )}
+                {isRestrictedVmSessionMode ? (
+                  <div className="px-4 pb-4">
+                    <a
+                      href={VOICE_BOSS_URL}
+                      className="w-full inline-flex items-center justify-center px-3 py-2 rounded-lg text-sm font-medium border border-cyan-500/40 bg-cyan-700/50 text-cyan-100 hover:bg-cyan-600/60 transition-colors"
+                    >
+                      Go to Voice Boss
+                    </a>
+                  </div>
+                ) : (
+                  <div className="px-4 pb-4 grid grid-cols-3 gap-2">
+                    <button
+                      onClick={fetchVmSessions}
+                      disabled={vmSessionsLoading}
+                      className={`w-full px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                        vmSessionsLoading
+                          ? 'bg-slate-900 border-slate-800 text-slate-500'
+                          : 'bg-slate-700/70 border-slate-500/50 text-slate-100 hover:bg-slate-600/80'
+                      }`}
+                    >
+                      Refresh
+                    </button>
+                    <button
+                      onClick={checkVmUpdates}
+                      disabled={vmUpdatesLoading || vmUpdateAllLoading || vmSessionsLoading || visibleVmSessions.length === 0}
+                      className={`w-full px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                        (vmUpdatesLoading || vmUpdateAllLoading || vmSessionsLoading || visibleVmSessions.length === 0)
+                          ? 'bg-slate-900 border-slate-800 text-slate-500'
+                          : 'bg-cyan-700/50 border-cyan-500/40 text-cyan-100 hover:bg-cyan-600/60'
+                      }`}
+                    >
+                      {vmUpdatesLoading ? 'Checking...' : 'Check Updates'}
+                    </button>
+                    <button
+                      onClick={runUpdateAll}
+                      disabled={vmUpdateAllLoading || vmUpdatesLoading || vmSessionsLoading || visibleVmSessions.length === 0}
+                      className={`w-full px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                        (vmUpdateAllLoading || vmUpdatesLoading || vmSessionsLoading || visibleVmSessions.length === 0)
+                          ? 'bg-slate-900 border-slate-800 text-slate-500'
+                          : 'bg-emerald-700/40 border-emerald-500/40 text-emerald-100 hover:bg-emerald-600/50'
+                      }`}
+                    >
+                      {vmUpdateAllLoading ? 'Updating...' : 'Update All'}
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
