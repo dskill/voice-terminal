@@ -63,13 +63,19 @@ function formatVmUpdateSummary(update) {
   }
 
   const serverText = update.serverRunning ? 'server running' : 'server down';
-  return `${gitText} / ${serverText}`;
+  const ttsText = update.ttsHealthy === true
+    ? 'tts ok'
+    : (update.ttsHealthy === false
+      ? `tts issue${update.ttsIssue ? ` (${update.ttsIssue})` : ''}`
+      : 'tts unknown');
+  return `${gitText} / ${serverText} / ${ttsText}`;
 }
 
 function vmUpdateTone(update) {
   if (!update) return 'text-slate-400';
   if (update.error) return 'text-rose-300';
   if (!update.serverRunning) return 'text-rose-300';
+  if (update.ttsHealthy === false) return 'text-amber-300';
   if (update.gitState === 'behind' || update.gitState === 'diverged') return 'text-amber-300';
   if (update.gitState === 'up-to-date') return 'text-emerald-300';
   return 'text-slate-300';
@@ -129,10 +135,12 @@ export default function App() {
   const [vmUpdateAllLoading, setVmUpdateAllLoading] = useState(false);
   const [vmUpdateAllError, setVmUpdateAllError] = useState('');
   const [vmSingleUpdateLoadingName, setVmSingleUpdateLoadingName] = useState('');
+  const [vmSingleAuthLoadingName, setVmSingleAuthLoadingName] = useState('');
   const [vmUpdateRunState, setVmUpdateRunState] = useState({
     runId: '',
     scope: '',
     vmName: '',
+    action: '',
     phase: 'idle',
     message: '',
     totalSessions: 0,
@@ -190,6 +198,7 @@ export default function App() {
   const vmUpdateRunIdRef = useRef('');
   const vmUpdateInlineLogRef = useRef(null);
   const vmUpdateGlobalLogRef = useRef(null);
+  const singleVmProgressHideTimerRef = useRef(null);
 
   // ---- WebSocket message handlers ----
 
@@ -620,6 +629,29 @@ export default function App() {
   }, [showVmSessions, vmUpdateRunState.scope, vmUpdateRunState.logs]);
 
   useEffect(() => {
+    const isSingleRun = vmUpdateRunState.scope === 'single';
+    const isTerminalPhase = vmUpdateRunState.phase === 'complete'
+      || vmUpdateRunState.phase === 'error'
+      || vmUpdateRunState.phase === 'cancelled';
+    if (!showVmUpdateProgressPanel || !isSingleRun || !isTerminalPhase) return;
+
+    if (singleVmProgressHideTimerRef.current) {
+      clearTimeout(singleVmProgressHideTimerRef.current);
+    }
+    singleVmProgressHideTimerRef.current = setTimeout(() => {
+      setShowVmUpdateProgressPanel(false);
+      singleVmProgressHideTimerRef.current = null;
+    }, 4500);
+
+    return () => {
+      if (singleVmProgressHideTimerRef.current) {
+        clearTimeout(singleVmProgressHideTimerRef.current);
+        singleVmProgressHideTimerRef.current = null;
+      }
+    };
+  }, [showVmUpdateProgressPanel, vmUpdateRunState.scope, vmUpdateRunState.phase]);
+
+  useEffect(() => {
     if (!showVmSessions) {
       setShowVmUpdateProgressPanel(false);
     }
@@ -627,6 +659,10 @@ export default function App() {
 
   useEffect(() => {
     return () => {
+      if (singleVmProgressHideTimerRef.current) {
+        clearTimeout(singleVmProgressHideTimerRef.current);
+        singleVmProgressHideTimerRef.current = null;
+      }
       if (doneFlashTimerRef.current) {
         clearTimeout(doneFlashTimerRef.current);
         doneFlashTimerRef.current = null;
@@ -829,6 +865,7 @@ export default function App() {
       runId,
       scope: 'all',
       vmName: '',
+      action: 'update-all',
       phase: 'start',
       message: 'Starting update all run...',
       totalSessions: 0,
@@ -877,6 +914,7 @@ export default function App() {
       runId,
       scope: 'single',
       vmName: normalized,
+      action: 'update',
       phase: 'start',
       message: `Starting update for ${normalized}...`,
       totalSessions: 1,
@@ -909,6 +947,49 @@ export default function App() {
       setVmSingleUpdateLoadingName('');
     }
   }, [fetchVmSessions]);
+
+  const runSingleVmAuthUpdate = useCallback(async (vmName) => {
+    const normalized = String(vmName || '').trim().toLowerCase();
+    if (!normalized) return;
+
+    const runId = createRunId();
+    vmUpdateRunIdRef.current = runId;
+    setShowVmUpdateProgressPanel(true);
+    setVmSingleAuthLoadingName(normalized);
+    setVmUpdateAllError('');
+    setVmUpdateRunState({
+      runId,
+      scope: 'single',
+      vmName: normalized,
+      action: 'auth',
+      phase: 'start',
+      message: `Starting auth update for ${normalized}...`,
+      totalSessions: 1,
+      completedSessions: 0,
+      currentSession: normalized,
+      logs: [`[run ${runId}] starting auth update for ${normalized}...`]
+    });
+
+    try {
+      const response = await fetch(`/api/vm-sessions/${encodeURIComponent(normalized)}/update-auth?runId=${encodeURIComponent(runId)}`, {
+        method: 'POST'
+      });
+      if (!response.ok) {
+        throw new Error(`Request failed (${response.status})`);
+      }
+      await response.json();
+    } catch (err) {
+      setVmUpdateAllError(err?.message || `Failed to update auth for ${normalized}`);
+      setVmUpdateRunState((prev) => ({
+        ...prev,
+        phase: 'error',
+        message: err?.message || `Failed to update auth for ${normalized}`,
+        logs: [...(Array.isArray(prev.logs) ? prev.logs : []), `Auth update failed: ${err?.message || 'unknown error'}`].slice(-VM_UPDATE_LOG_LIMIT)
+      }));
+    } finally {
+      setVmSingleAuthLoadingName('');
+    }
+  }, []);
 
   const cancelMessage = useCallback(() => {
     setShowInput(false);
@@ -1552,9 +1633,12 @@ export default function App() {
 
                   {!vmSessionsLoading && !vmSessionsError && visibleVmSessions.map((session) => {
                     const isUpdatingThisVm = vmSingleUpdateLoadingName === session.name;
+                    const isUpdatingAuthThisVm = vmSingleAuthLoadingName === session.name;
                     const isSingleRunForVm = vmUpdateRunState.scope === 'single' && vmUpdateRunState.vmName === session.name;
-                    const showSingleVmProgress = isSingleRunForVm && (
+                    const singleRunActionLabel = vmUpdateRunState.action === 'auth' ? 'Auth update' : 'Update';
+                    const showSingleVmProgress = showVmUpdateProgressPanel && isSingleRunForVm && (
                       isUpdatingThisVm
+                      || isUpdatingAuthThisVm
                       || vmUpdateRunState.phase === 'complete'
                       || vmUpdateRunState.phase === 'error'
                       || vmUpdateRunState.phase === 'cancelled'
@@ -1586,30 +1670,72 @@ export default function App() {
                           </button>
                           <button
                             onClick={() => runSingleVmUpdate(session.name)}
-                            disabled={vmUpdateAllLoading || vmUpdatesLoading || vmSessionsLoading || !!vmSingleUpdateLoadingName}
+                            disabled={
+                              vmUpdateAllLoading
+                              || vmUpdatesLoading
+                              || vmSessionsLoading
+                              || !!vmSingleUpdateLoadingName
+                              || !!vmSingleAuthLoadingName
+                            }
                             className={`shrink-0 px-2.5 py-1.5 rounded-md text-xs font-medium border transition-colors ${
-                              (vmUpdateAllLoading || vmUpdatesLoading || vmSessionsLoading || !!vmSingleUpdateLoadingName)
+                              (vmUpdateAllLoading
+                                || vmUpdatesLoading
+                                || vmSessionsLoading
+                                || !!vmSingleUpdateLoadingName
+                                || !!vmSingleAuthLoadingName)
                                 ? 'bg-slate-900 border-slate-800 text-slate-500'
                                 : 'bg-emerald-700/40 border-emerald-500/40 text-emerald-100 hover:bg-emerald-600/50'
                             }`}
                           >
                             {isUpdatingThisVm ? 'Updating...' : 'Update'}
                           </button>
+                          <button
+                            onClick={() => runSingleVmAuthUpdate(session.name)}
+                            disabled={
+                              vmUpdateAllLoading
+                              || vmUpdatesLoading
+                              || vmSessionsLoading
+                              || !!vmSingleUpdateLoadingName
+                              || !!vmSingleAuthLoadingName
+                            }
+                            className={`shrink-0 px-2.5 py-1.5 rounded-md text-xs font-medium border transition-colors ${
+                              (vmUpdateAllLoading
+                                || vmUpdatesLoading
+                                || vmSessionsLoading
+                                || !!vmSingleUpdateLoadingName
+                                || !!vmSingleAuthLoadingName)
+                                ? 'bg-slate-900 border-slate-800 text-slate-500'
+                                : 'bg-cyan-700/50 border-cyan-500/40 text-cyan-100 hover:bg-cyan-600/60'
+                            }`}
+                          >
+                            {isUpdatingAuthThisVm ? 'Updating...' : 'Update Auth'}
+                          </button>
                         </div>
 
                         {showSingleVmProgress && (
                           <div className="mt-2 rounded-md border border-emerald-500/30 bg-slate-950/70 px-2 py-2">
-                            <div className="flex items-center justify-between text-[11px] text-slate-300">
-                              <span>
+                            <div className="flex items-center justify-between gap-2 text-[11px] text-slate-300">
+                              <span className="min-w-0">
                                 {vmUpdateRunState.phase === 'complete'
-                                  ? 'Update complete'
+                                  ? `${singleRunActionLabel} complete`
                                   : vmUpdateRunState.phase === 'error'
-                                    ? 'Update failed'
+                                    ? `${singleRunActionLabel} failed`
                                     : vmUpdateRunState.phase === 'cancelled'
-                                      ? 'Update cancelled'
-                                      : 'Updating...'}
+                                      ? `${singleRunActionLabel} cancelled`
+                                      : `${singleRunActionLabel} in progress...`}
                               </span>
-                              <span>{vmUpdateProgressTotal > 0 ? `${vmUpdateProgressCompleted}/${vmUpdateProgressTotal}` : 'running'}</span>
+                              <div className="flex items-center gap-2">
+                                <span>{vmUpdateProgressTotal > 0 ? `${vmUpdateProgressCompleted}/${vmUpdateProgressTotal}` : 'running'}</span>
+                                <button
+                                  onClick={() => setShowVmUpdateProgressPanel(false)}
+                                  className="w-5 h-5 rounded-full flex items-center justify-center border border-slate-700 bg-slate-900 text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                                  title="Dismiss"
+                                >
+                                  <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                                    <path d="M18 6 6 18M6 6l12 12" />
+                                  </svg>
+                                </button>
+                              </div>
                             </div>
                             <div className="mt-1 h-1.5 rounded-full bg-slate-800 overflow-hidden">
                               <div

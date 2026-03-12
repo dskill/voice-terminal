@@ -87,6 +87,7 @@ let tmuxStatusInterval = null;
 let lastTmuxStatusJson = '';
 let activeTmuxSessionName = '';
 const activeTTSStreams = new Map();
+const activeVmUpdateRuns = new Map();
 
 function cloneToolCalls(toolCalls) {
   if (!Array.isArray(toolCalls)) return [];
@@ -179,7 +180,9 @@ function execFileDetailed(command, args) {
   });
 }
 
-function execFileStreamed(command, args, onLine) {
+function execFileStreamed(command, args, onLine, options = {}) {
+  const { signal } = options;
+
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       encoding: 'utf8'
@@ -190,6 +193,8 @@ function execFileStreamed(command, args, onLine) {
 
     const stdoutInterface = createInterface({ input: child.stdout });
     const stderrInterface = createInterface({ input: child.stderr });
+
+    let wasAborted = false;
 
     function handleLine(raw, stream) {
       const trimmed = String(raw || '').replace(/\r$/, '').trimEnd();
@@ -204,6 +209,21 @@ function execFileStreamed(command, args, onLine) {
       }
     }
 
+    function onAbort() {
+      wasAborted = true;
+      if (child.pid) {
+        child.kill('SIGTERM');
+      }
+    }
+
+    if (signal) {
+      if (signal.aborted) {
+        onAbort();
+      } else {
+        signal.addEventListener('abort', onAbort, { once: true });
+      }
+    }
+
     stdoutInterface.on('line', (line) => {
       handleLine(line, 'stdout');
     });
@@ -213,6 +233,9 @@ function execFileStreamed(command, args, onLine) {
     });
 
     child.on('error', (error) => {
+      if (signal) {
+        signal.removeEventListener('abort', onAbort);
+      }
       resolve({
         ok: false,
         stdout: stdout.trim(),
@@ -222,14 +245,180 @@ function execFileStreamed(command, args, onLine) {
     });
 
     child.on('close', (code) => {
+      if (signal) {
+        signal.removeEventListener('abort', onAbort);
+      }
+      if (signal?.aborted) {
+        wasAborted = true;
+      }
       resolve({
-        ok: code === 0,
+        ok: !wasAborted && code === 0,
         stdout: stdout.trim(),
         stderr: stderr.trim(),
-        error: code === 0 ? '' : (stderr.trim() || `Command exited with code ${code}`)
+        error: code === 0 && !wasAborted
+          ? ''
+          : (wasAborted ? 'Update cancelled' : (stderr.trim() || `Command exited with code ${code}`))
       });
     });
   });
+}
+
+function getHostFromVmName(vmName) {
+  return `${vmName}.exe.xyz`;
+}
+
+function isValidVmName(vmName) {
+  return /^[a-z0-9][a-z0-9-]*$/.test(String(vmName || '').trim().toLowerCase());
+}
+
+function createVmUpdateRun(runId, mode, metadata = {}) {
+  const run = {
+    runId,
+    mode,
+    cancelled: false,
+    metadata,
+    controllers: new Set()
+  };
+  activeVmUpdateRuns.set(runId, run);
+  return run;
+}
+
+function getVmUpdateRun(runId) {
+  return activeVmUpdateRuns.get(runId);
+}
+
+function finalizeVmUpdateRun(runId) {
+  const run = activeVmUpdateRuns.get(runId);
+  if (!run) return;
+  if (run.controllers.size > 0) {
+    for (const controller of run.controllers) {
+      if (!controller.signal.aborted) {
+        controller.abort();
+      }
+    }
+  }
+  activeVmUpdateRuns.delete(runId);
+}
+
+function cancelVmUpdateRun(runId) {
+  const run = getVmUpdateRun(runId);
+  if (!run || run.cancelled) return false;
+  run.cancelled = true;
+  if (run.controllers.size > 0) {
+    for (const controller of run.controllers) {
+      if (!controller.signal.aborted) {
+        controller.abort();
+      }
+    }
+  }
+  return true;
+}
+
+function runVmSetupOnHost(hostname, onLine, runId) {
+  const run = getVmUpdateRun(runId);
+  if (!run) {
+    return Promise.resolve({ ok: false, error: 'Update run not found' });
+  }
+  const controller = new AbortController();
+  run.controllers.add(controller);
+  return execFileStreamed('node', [join(__dirname, '../bin/vm-setup.js'), hostname], onLine, { signal: controller.signal })
+    .finally(() => {
+      run.controllers.delete(controller);
+    })
+    .then((result) => ({
+      success: result.ok,
+      error: result.ok ? '' : (result.error || 'update failed'),
+      output: [result.stdout, result.stderr].filter(Boolean).join('\n').trim()
+    }));
+}
+
+function shellQuote(value) {
+  return `'${String(value || '').replace(/'/g, `'\"'\"'`)}'`;
+}
+
+function runVmAuthSyncOnHost(hostname, onLine, runId) {
+  const run = getVmUpdateRun(runId);
+  if (!run) {
+    return Promise.resolve({ ok: false, error: 'Update run not found' });
+  }
+
+  const localHome = homedir();
+  const controller = new AbortController();
+  run.controllers.add(controller);
+
+  const script = `
+set -euo pipefail
+HOST=${shellQuote(hostname)}
+LOCAL_HOME=${shellQuote(localHome)}
+SSH_OPTS=(-o ConnectTimeout=5 -o BatchMode=yes -o StrictHostKeyChecking=accept-new)
+
+copy_file_if_exists() {
+  local src="$1"
+  local dest="$2"
+  if [ -f "$src" ]; then
+    echo "copy:file $src -> $dest"
+    scp "\${SSH_OPTS[@]}" "$src" "$HOST:$dest"
+  else
+    echo "skip:file-missing $src"
+  fi
+}
+
+echo "prepare:remote-dirs"
+ssh "\${SSH_OPTS[@]}" "$HOST" 'mkdir -p ~/.claude ~/.codex ~/.config/gh'
+
+copy_file_if_exists "$LOCAL_HOME/.claude.json" "~/.claude.json"
+copy_file_if_exists "$LOCAL_HOME/.claude/.credentials.json" "~/.claude/.credentials.json"
+
+if [ -d "$LOCAL_HOME/.codex" ]; then
+  echo "copy:dir $LOCAL_HOME/.codex -> ~/.codex/"
+  scp -r "\${SSH_OPTS[@]}" "$LOCAL_HOME/.codex/." "$HOST:~/.codex/"
+else
+  echo "skip:dir-missing $LOCAL_HOME/.codex"
+fi
+
+if [ -f "$LOCAL_HOME/.config/gh/hosts.yml" ]; then
+  echo "copy:file $LOCAL_HOME/.config/gh/hosts.yml -> ~/.config/gh/hosts.yml"
+  scp "\${SSH_OPTS[@]}" "$LOCAL_HOME/.config/gh/hosts.yml" "$HOST:~/.config/gh/hosts.yml"
+elif command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1 && [ -f "$LOCAL_HOME/.local/share/gh/hosts.yml" ]; then
+  echo "copy:file $LOCAL_HOME/.local/share/gh/hosts.yml -> ~/.config/gh/hosts.yml"
+  scp "\${SSH_OPTS[@]}" "$LOCAL_HOME/.local/share/gh/hosts.yml" "$HOST:~/.config/gh/hosts.yml"
+else
+  echo "skip:github-token-not-found"
+fi
+
+copy_file_if_exists "$LOCAL_HOME/.gitconfig" "~/.gitconfig"
+copy_file_if_exists "$LOCAL_HOME/.git-credentials" "~/.git-credentials"
+
+echo "done:auth-sync"
+`;
+
+  return execFileStreamed('bash', ['-lc', script], onLine, { signal: controller.signal })
+    .finally(() => {
+      run.controllers.delete(controller);
+    })
+    .then((result) => ({
+      success: result.ok,
+      error: result.ok ? '' : (result.error || 'auth update failed'),
+      output: [result.stdout, result.stderr].filter(Boolean).join('\n').trim()
+    }));
+}
+
+async function listVmSessions() {
+  const rawList = await execFileAsync('ssh', ['exe.dev', 'ls']);
+  const vmNames = parseVmNamesFromExeList(rawList);
+  const sessions = await Promise.all(vmNames.map(async (name) => {
+    const url = `https://${name}.exe.xyz:${PORT}/`;
+    const hasVoiceTerminal = await vmHasVoiceTerminal(`${name}.exe.xyz`);
+    return { name, url, hasVoiceTerminal };
+  }));
+  return sessions;
+}
+
+function buildVmUpdateSessionsPayload(sessions, updateByName) {
+  return sessions.map((session) => ({
+    ...session,
+    update: session.hasVoiceTerminal ? (updateByName?.[session.name] || null) : null
+  }));
 }
 
 const HIDDEN_SESSIONS = new Set(['voice-terminal', 'claude-code-sdk']);
@@ -1272,6 +1461,52 @@ async function vmHasVoiceTerminal(hostname) {
 
 async function readVmUpdateStatus(hostname) {
   try {
+    const statusCommand = `cd ~/voice-terminal >/dev/null 2>&1 || { echo "ERROR:missing-repo"; exit 0; }
+if pgrep -f "node src/server.js|node --watch src/server.js|npm run dev" >/dev/null 2>&1; then echo "SERVER:running"; else echo "SERVER:down"; fi
+git fetch --quiet origin >/dev/null 2>&1 || true
+LOCAL=$(git rev-parse HEAD 2>/dev/null || echo "")
+UPSTREAM=$(git rev-parse @{u} 2>/dev/null || echo "")
+if [ -z "$UPSTREAM" ]; then UPSTREAM=$(git rev-parse origin/HEAD 2>/dev/null || echo ""); fi
+if [ -z "$LOCAL" ] || [ -z "$UPSTREAM" ]; then
+  echo "GIT:unknown"
+  echo "AHEAD:0"
+  echo "BEHIND:0"
+else
+  AHEAD=$(git rev-list --count "$UPSTREAM..$LOCAL" 2>/dev/null || echo "0")
+  BEHIND=$(git rev-list --count "$LOCAL..$UPSTREAM" 2>/dev/null || echo "0")
+  if [ "$AHEAD" = "0" ] && [ "$BEHIND" = "0" ]; then STATE="up-to-date";
+  elif [ "$AHEAD" = "0" ]; then STATE="behind";
+  elif [ "$BEHIND" = "0" ]; then STATE="ahead";
+  else STATE="diverged"; fi
+  echo "GIT:$STATE"
+  echo "AHEAD:$AHEAD"
+  echo "BEHIND:$BEHIND"
+fi
+if [ -s models/piper/en_US-lessac-medium.onnx ]; then echo "TTS_MODEL:ok"; else echo "TTS_MODEL:missing"; fi
+if [ -s models/piper/en_US-lessac-medium.onnx.json ]; then echo "TTS_CONFIG:ok"; else echo "TTS_CONFIG:missing"; fi
+if [ -x .venv/bin/piper ]; then echo "TTS_PIPER_BIN:ok"; else echo "TTS_PIPER_BIN:missing"; fi
+if [ -x .venv/bin/python ]; then
+  IMPORT_STATUS=$(.venv/bin/python - <<'PY'
+import importlib.util
+mods=["piper", "pathvalidate", "onnxruntime"]
+missing=[m for m in mods if importlib.util.find_spec(m) is None]
+print("ok" if not missing else "missing:" + ",".join(missing))
+PY
+)
+  echo "TTS_IMPORT:$IMPORT_STATUS"
+else
+  echo "TTS_IMPORT:missing-python"
+fi
+if [ -x .venv/bin/piper ]; then
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 5 .venv/bin/piper --help >/dev/null 2>&1 && echo "TTS_CLI:ok" || echo "TTS_CLI:fail"
+  else
+    .venv/bin/piper --help >/dev/null 2>&1 && echo "TTS_CLI:ok" || echo "TTS_CLI:fail"
+  fi
+else
+  echo "TTS_CLI:missing"
+fi`;
+
     const output = await execFileAsync('ssh', [
       '-o',
       'ConnectTimeout=5',
@@ -1280,7 +1515,7 @@ async function readVmUpdateStatus(hostname) {
       '-o',
       'StrictHostKeyChecking=accept-new',
       hostname,
-      'cd ~/voice-terminal >/dev/null 2>&1 || { echo "ERROR:missing-repo"; exit 0; }; if pgrep -f "node src/server.js|node --watch src/server.js|npm run dev" >/dev/null 2>&1; then echo "SERVER:running"; else echo "SERVER:down"; fi; git fetch --quiet origin >/dev/null 2>&1 || true; LOCAL=$(git rev-parse HEAD 2>/dev/null || echo ""); UPSTREAM=$(git rev-parse @{u} 2>/dev/null || echo ""); if [ -z "$UPSTREAM" ]; then UPSTREAM=$(git rev-parse origin/HEAD 2>/dev/null || echo ""); fi; if [ -z "$LOCAL" ] || [ -z "$UPSTREAM" ]; then echo "GIT:unknown"; echo "AHEAD:0"; echo "BEHIND:0"; exit 0; fi; AHEAD=$(git rev-list --count "$UPSTREAM..$LOCAL" 2>/dev/null || echo "0"); BEHIND=$(git rev-list --count "$LOCAL..$UPSTREAM" 2>/dev/null || echo "0"); if [ "$AHEAD" = "0" ] && [ "$BEHIND" = "0" ]; then STATE="up-to-date"; elif [ "$AHEAD" = "0" ]; then STATE="behind"; elif [ "$BEHIND" = "0" ]; then STATE="ahead"; else STATE="diverged"; fi; echo "GIT:$STATE"; echo "AHEAD:$AHEAD"; echo "BEHIND:$BEHIND"'
+      statusCommand
     ]);
 
     const result = {
@@ -1288,7 +1523,16 @@ async function readVmUpdateStatus(hostname) {
       gitState: 'unknown',
       aheadCount: 0,
       behindCount: 0,
-      error: ''
+      error: '',
+      ttsHealthy: false,
+      ttsIssue: '',
+      ttsChecks: {
+        model: false,
+        config: false,
+        piperBin: false,
+        importsOk: false,
+        cliOk: false
+      }
     };
 
     for (const line of String(output || '').split('\n')) {
@@ -1299,8 +1543,27 @@ async function readVmUpdateStatus(hostname) {
       else if (trimmed.startsWith('GIT:')) result.gitState = trimmed.slice(4).trim() || 'unknown';
       else if (trimmed.startsWith('AHEAD:')) result.aheadCount = Number(trimmed.slice(6).trim() || 0);
       else if (trimmed.startsWith('BEHIND:')) result.behindCount = Number(trimmed.slice(7).trim() || 0);
+      else if (trimmed === 'TTS_MODEL:ok') result.ttsChecks.model = true;
+      else if (trimmed === 'TTS_CONFIG:ok') result.ttsChecks.config = true;
+      else if (trimmed === 'TTS_PIPER_BIN:ok') result.ttsChecks.piperBin = true;
+      else if (trimmed === 'TTS_IMPORT:ok') result.ttsChecks.importsOk = true;
+      else if (trimmed === 'TTS_CLI:ok') result.ttsChecks.cliOk = true;
+      else if (trimmed.startsWith('TTS_IMPORT:') && trimmed !== 'TTS_IMPORT:ok') {
+        result.ttsIssue = trimmed.slice('TTS_IMPORT:'.length).trim();
+      }
       else if (trimmed.startsWith('ERROR:')) result.error = trimmed.slice(6).trim() || 'unknown error';
     }
+
+    const ttsIssues = [];
+    if (!result.ttsChecks.model) ttsIssues.push('model missing');
+    if (!result.ttsChecks.config) ttsIssues.push('model config missing');
+    if (!result.ttsChecks.piperBin) ttsIssues.push('piper binary missing');
+    if (!result.ttsChecks.importsOk) {
+      ttsIssues.push(result.ttsIssue ? `imports ${result.ttsIssue}` : 'python deps missing');
+    }
+    if (!result.ttsChecks.cliOk) ttsIssues.push('piper CLI check failed');
+    result.ttsHealthy = ttsIssues.length === 0;
+    result.ttsIssue = ttsIssues.join(', ');
 
     return result;
   } catch (err) {
@@ -1309,31 +1572,23 @@ async function readVmUpdateStatus(hostname) {
       gitState: 'unknown',
       aheadCount: 0,
       behindCount: 0,
-      error: err.message || 'ssh check failed'
+      error: err.message || 'ssh check failed',
+      ttsHealthy: false,
+      ttsIssue: 'health check failed',
+      ttsChecks: {
+        model: false,
+        config: false,
+        piperBin: false,
+        importsOk: false,
+        cliOk: false
+      }
     };
   }
 }
 
-function updateAllOnVm(hostname, onLine) {
-  return execFileStreamed('node', [join(__dirname, '../bin/vm-setup.js'), hostname], onLine).then((result) => {
-    const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
-    return {
-      success: result.ok,
-      error: result.ok ? '' : (result.stderr || result.error || 'update failed'),
-      output
-    };
-  });
-}
-
 app.get('/api/vm-sessions', async (_req, res) => {
   try {
-    const rawList = await execFileAsync('ssh', ['exe.dev', 'ls']);
-    const vmNames = parseVmNamesFromExeList(rawList);
-    const sessions = await Promise.all(vmNames.map(async (name) => {
-      const url = `https://${name}.exe.xyz:${PORT}/`;
-      const hasVoiceTerminal = await vmHasVoiceTerminal(`${name}.exe.xyz`);
-      return { name, url, hasVoiceTerminal };
-    }));
+    const sessions = await listVmSessions();
     res.json(sessions);
   } catch (err) {
     res.status(500).json({
@@ -1344,13 +1599,7 @@ app.get('/api/vm-sessions', async (_req, res) => {
 
 app.get('/api/vm-sessions/updates', async (_req, res) => {
   try {
-    const rawList = await execFileAsync('ssh', ['exe.dev', 'ls']);
-    const vmNames = parseVmNamesFromExeList(rawList);
-    const sessions = await Promise.all(vmNames.map(async (name) => {
-      const url = `https://${name}.exe.xyz:${PORT}/`;
-      const hasVoiceTerminal = await vmHasVoiceTerminal(`${name}.exe.xyz`);
-      return { name, url, hasVoiceTerminal };
-    }));
+    const sessions = await listVmSessions();
 
     const installed = sessions.filter((session) => session.hasVoiceTerminal);
     const checked = await Promise.all(installed.map(async (session) => ({
@@ -1359,10 +1608,7 @@ app.get('/api/vm-sessions/updates', async (_req, res) => {
     })));
     const updateByName = Object.fromEntries(checked.map((entry) => [entry.name, entry.update]));
 
-    res.json(sessions.map((session) => ({
-      ...session,
-      update: session.hasVoiceTerminal ? (updateByName[session.name] || null) : null
-    })));
+    res.json(buildVmUpdateSessionsPayload(sessions, updateByName));
   } catch (err) {
     res.status(500).json({
       error: err.message || 'Failed to check VM updates'
@@ -1372,18 +1618,15 @@ app.get('/api/vm-sessions/updates', async (_req, res) => {
 
 app.post('/api/vm-sessions/update-all', async (_req, res) => {
   const runId = String(_req?.query?.runId || _req?.body?.runId || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
-  try {
-    const rawList = await execFileAsync('ssh', ['exe.dev', 'ls']);
-    const vmNames = parseVmNamesFromExeList(rawList);
-    const sessions = await Promise.all(vmNames.map(async (name) => {
-      const url = `https://${name}.exe.xyz:${PORT}/`;
-      const hasVoiceTerminal = await vmHasVoiceTerminal(`${name}.exe.xyz`);
-      return { name, url, hasVoiceTerminal };
-    }));
+  const run = createVmUpdateRun(runId, 'all');
 
+  try {
+    const sessions = await listVmSessions();
     const installed = sessions.filter((session) => session.hasVoiceTerminal);
     const updated = [];
     const totalSessions = installed.length;
+    run.metadata.totalSessions = totalSessions;
+    run.metadata.completedSessions = 0;
 
     broadcastToClients({
       type: 'vm-update-progress',
@@ -1396,6 +1639,11 @@ app.post('/api/vm-sessions/update-all', async (_req, res) => {
 
     for (let index = 0; index < installed.length; index += 1) {
       const session = installed[index];
+      run.metadata.currentSession = session.name;
+      run.metadata.currentIndex = index + 1;
+
+      if (run.cancelled) break;
+
       broadcastToClients({
         type: 'vm-update-progress',
         runId,
@@ -1407,7 +1655,7 @@ app.post('/api/vm-sessions/update-all', async (_req, res) => {
         message: `Starting update for ${session.name}`
       });
 
-      const result = await updateAllOnVm(`${session.name}.exe.xyz`, (payload) => {
+      const result = await runVmSetupOnHost(`${session.name}.exe.xyz`, (payload) => {
         broadcastToClients({
           type: 'vm-update-progress',
           runId,
@@ -1416,9 +1664,10 @@ app.post('/api/vm-sessions/update-all', async (_req, res) => {
           stream: payload.stream,
           line: payload.line
         });
-      });
+      }, runId);
 
       updated.push({ name: session.name, result });
+      run.metadata.completedSessions = updated.length;
       broadcastToClients({
         type: 'vm-update-progress',
         runId,
@@ -1431,16 +1680,32 @@ app.post('/api/vm-sessions/update-all', async (_req, res) => {
         success: !!result.success,
         error: result.success ? '' : (result.error || 'update failed')
       });
+
+      if (run.cancelled) {
+        break;
+      }
     }
 
-    broadcastToClients({
-      type: 'vm-update-progress',
-      runId,
-      phase: 'complete',
-      totalSessions,
-      completedSessions: updated.length,
-      message: `Update all complete for ${totalSessions} VM(s).`
-    });
+    if (run.cancelled) {
+      broadcastToClients({
+        type: 'vm-update-progress',
+        runId,
+        phase: 'cancelled',
+        totalSessions,
+        completedSessions: updated.length,
+        currentSession: run.metadata.currentSession || '',
+        message: `Update all cancelled after ${updated.length}/${totalSessions} VM(s).`
+      });
+    } else {
+      broadcastToClients({
+        type: 'vm-update-progress',
+        runId,
+        phase: 'complete',
+        totalSessions,
+        completedSessions: updated.length,
+        message: `Update all complete for ${totalSessions} VM(s).`
+      });
+    }
 
     const resultByName = Object.fromEntries(updated.map((entry) => [entry.name, entry.result]));
 
@@ -1458,7 +1723,270 @@ app.post('/api/vm-sessions/update-all', async (_req, res) => {
     res.status(500).json({
       error: err.message || 'Failed to update VM sessions'
     });
+  } finally {
+    finalizeVmUpdateRun(runId);
   }
+});
+
+app.post('/api/vm-sessions/:vmName/update', async (_req, res) => {
+  const vmName = String(_req?.params?.vmName || '').trim().toLowerCase();
+  if (!isValidVmName(vmName)) {
+    res.status(400).json({
+      error: 'Invalid VM name'
+    });
+    return;
+  }
+
+  const runId = String(_req?.query?.runId || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  const run = createVmUpdateRun(runId, 'single', { vmName });
+
+  try {
+    const sessions = await listVmSessions();
+    const session = sessions.find((entry) => entry.name === vmName);
+    if (!session) {
+      res.status(404).json({ error: 'VM not found' });
+      return;
+    }
+
+    if (!session.hasVoiceTerminal) {
+      res.status(409).json({
+        error: 'Selected VM does not appear to be running Voice Terminal'
+      });
+      return;
+    }
+
+    run.metadata.totalSessions = 1;
+    run.metadata.currentSession = vmName;
+    run.metadata.currentIndex = 1;
+    run.metadata.completedSessions = 0;
+
+    broadcastToClients({
+      type: 'vm-update-progress',
+      runId,
+      phase: 'start',
+      totalSessions: 1,
+      completedSessions: 0,
+      message: `Starting update for ${vmName}`
+    });
+
+    broadcastToClients({
+      type: 'vm-update-progress',
+      runId,
+      phase: 'session-start',
+      sessionName: vmName,
+      totalSessions: 1,
+      currentIndex: 1,
+      completedSessions: 0,
+      message: `Starting update for ${vmName}`
+    });
+
+    const result = await runVmSetupOnHost(`${vmName}.exe.xyz`, (payload) => {
+      broadcastToClients({
+        type: 'vm-update-progress',
+        runId,
+        phase: 'session-log',
+        sessionName: vmName,
+        stream: payload.stream,
+        line: payload.line
+      });
+    }, runId);
+
+    run.metadata.completedSessions = 1;
+    broadcastToClients({
+      type: 'vm-update-progress',
+      runId,
+      phase: 'session-complete',
+      sessionName: vmName,
+      totalSessions: 1,
+      currentIndex: 1,
+      completedSessions: 1,
+      message: result.success ? 'Update completed' : (result.error || 'Update failed'),
+      success: !!result.success,
+      error: result.success ? '' : (result.error || 'update failed')
+    });
+
+    if (run.cancelled) {
+      broadcastToClients({
+        type: 'vm-update-progress',
+        runId,
+        phase: 'cancelled',
+        totalSessions: 1,
+        completedSessions: 1,
+        currentSession: vmName,
+        message: `Update for ${vmName} was cancelled.`
+      });
+    } else {
+      broadcastToClients({
+        type: 'vm-update-progress',
+        runId,
+        phase: 'complete',
+        totalSessions: 1,
+        completedSessions: 1,
+        currentSession: vmName,
+        message: `Update complete for ${vmName}.`
+      });
+    }
+
+    res.json({
+      ...session,
+      updateAll: result
+    });
+  } catch (err) {
+    broadcastToClients({
+      type: 'vm-update-progress',
+      runId,
+      phase: 'error',
+      message: err.message || 'Failed to update VM session'
+    });
+    res.status(500).json({
+      error: err.message || 'Failed to update VM session'
+    });
+  } finally {
+    finalizeVmUpdateRun(runId);
+  }
+});
+
+app.post('/api/vm-sessions/:vmName/update-auth', async (_req, res) => {
+  const vmName = String(_req?.params?.vmName || '').trim().toLowerCase();
+  if (!isValidVmName(vmName)) {
+    res.status(400).json({
+      error: 'Invalid VM name'
+    });
+    return;
+  }
+
+  const runId = String(_req?.query?.runId || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  const run = createVmUpdateRun(runId, 'auth', { vmName });
+
+  try {
+    const sessions = await listVmSessions();
+    const session = sessions.find((entry) => entry.name === vmName);
+    if (!session) {
+      res.status(404).json({ error: 'VM not found' });
+      return;
+    }
+
+    run.metadata.totalSessions = 1;
+    run.metadata.currentSession = vmName;
+    run.metadata.currentIndex = 1;
+    run.metadata.completedSessions = 0;
+
+    broadcastToClients({
+      type: 'vm-update-progress',
+      runId,
+      phase: 'start',
+      totalSessions: 1,
+      completedSessions: 0,
+      message: `Starting auth update for ${vmName}`
+    });
+
+    broadcastToClients({
+      type: 'vm-update-progress',
+      runId,
+      phase: 'session-start',
+      sessionName: vmName,
+      totalSessions: 1,
+      currentIndex: 1,
+      completedSessions: 0,
+      message: `Syncing auth files for ${vmName}`
+    });
+
+    const result = await runVmAuthSyncOnHost(`${vmName}.exe.xyz`, (payload) => {
+      broadcastToClients({
+        type: 'vm-update-progress',
+        runId,
+        phase: 'session-log',
+        sessionName: vmName,
+        stream: payload.stream,
+        line: payload.line
+      });
+    }, runId);
+
+    run.metadata.completedSessions = 1;
+    broadcastToClients({
+      type: 'vm-update-progress',
+      runId,
+      phase: 'session-complete',
+      sessionName: vmName,
+      totalSessions: 1,
+      currentIndex: 1,
+      completedSessions: 1,
+      message: result.success ? 'Auth update completed' : (result.error || 'Auth update failed'),
+      success: !!result.success,
+      error: result.success ? '' : (result.error || 'auth update failed')
+    });
+
+    if (run.cancelled) {
+      broadcastToClients({
+        type: 'vm-update-progress',
+        runId,
+        phase: 'cancelled',
+        totalSessions: 1,
+        completedSessions: 1,
+        currentSession: vmName,
+        message: `Auth update for ${vmName} was cancelled.`
+      });
+    } else {
+      broadcastToClients({
+        type: 'vm-update-progress',
+        runId,
+        phase: 'complete',
+        totalSessions: 1,
+        completedSessions: 1,
+        currentSession: vmName,
+        message: `Auth update complete for ${vmName}.`
+      });
+    }
+
+    res.json({
+      ...session,
+      updateAuth: result
+    });
+  } catch (err) {
+    broadcastToClients({
+      type: 'vm-update-progress',
+      runId,
+      phase: 'error',
+      message: err.message || 'Failed to update VM auth'
+    });
+    res.status(500).json({
+      error: err.message || 'Failed to update VM auth'
+    });
+  } finally {
+    finalizeVmUpdateRun(runId);
+  }
+});
+
+app.post('/api/vm-sessions/update/cancel', (_req, res) => {
+  const runId = String(_req?.query?.runId || '').trim();
+  if (!runId) {
+    res.status(400).json({ error: 'runId is required' });
+    return;
+  }
+
+  const run = getVmUpdateRun(runId);
+  if (!run) {
+    res.status(404).json({ error: 'No running VM update found for this runId' });
+    return;
+  }
+
+  const cancelled = cancelVmUpdateRun(runId);
+  if (!cancelled) {
+    res.status(409).json({ error: 'VM update already cancelled' });
+    return;
+  }
+
+  broadcastToClients({
+    type: 'vm-update-progress',
+    runId,
+    phase: 'cancelled',
+    totalSessions: run.metadata?.totalSessions || 0,
+    completedSessions: run.metadata?.completedSessions || 0,
+    currentSession: run.metadata?.currentSession || '',
+    message: 'Update cancel requested.'
+  });
+
+  res.json({ success: true, runId });
 });
 
 app.post('/upload', async (req, res) => {
