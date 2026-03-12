@@ -128,8 +128,11 @@ export default function App() {
   const [vmUpdateAllByName, setVmUpdateAllByName] = useState({});
   const [vmUpdateAllLoading, setVmUpdateAllLoading] = useState(false);
   const [vmUpdateAllError, setVmUpdateAllError] = useState('');
+  const [vmSingleUpdateLoadingName, setVmSingleUpdateLoadingName] = useState('');
   const [vmUpdateRunState, setVmUpdateRunState] = useState({
     runId: '',
+    scope: '',
+    vmName: '',
     phase: 'idle',
     message: '',
     totalSessions: 0,
@@ -185,6 +188,8 @@ export default function App() {
   const wakeLockRef = useRef(null);
   const recordingControlsRef = useRef(null);
   const vmUpdateRunIdRef = useRef('');
+  const vmUpdateInlineLogRef = useRef(null);
+  const vmUpdateGlobalLogRef = useRef(null);
 
   // ---- WebSocket message handlers ----
 
@@ -486,7 +491,7 @@ export default function App() {
       const incomingRunId = String(data.runId || '').trim();
       if (!incomingRunId) return;
 
-      if (vmUpdateRunIdRef.current && incomingRunId !== vmUpdateRunIdRef.current) {
+      if (!vmUpdateRunIdRef.current || incomingRunId !== vmUpdateRunIdRef.current) {
         return;
       }
 
@@ -521,7 +526,10 @@ export default function App() {
           const line = `==> ${data?.sessionName || 'vm'}: update ${outcome}${extra}`;
           next.logs = [...(Array.isArray(prev.logs) ? prev.logs : []), line].slice(-VM_UPDATE_LOG_LIMIT);
         } else if (data?.phase === 'error') {
-          const line = `Update all failed: ${data?.message || 'unknown error'}`;
+          const line = `Update failed: ${data?.message || 'unknown error'}`;
+          next.logs = [...(Array.isArray(prev.logs) ? prev.logs : []), line].slice(-VM_UPDATE_LOG_LIMIT);
+        } else if (data?.phase === 'cancelled') {
+          const line = `Update cancelled: ${data?.message || ''}`;
           next.logs = [...(Array.isArray(prev.logs) ? prev.logs : []), line].slice(-VM_UPDATE_LOG_LIMIT);
         } else {
           next.logs = prev.logs;
@@ -595,6 +603,21 @@ export default function App() {
       }
     };
   }, [requestWakeLock]);
+
+  useEffect(() => {
+    const hasLogs = Array.isArray(vmUpdateRunState.logs) && vmUpdateRunState.logs.length > 0;
+    if (!showVmSessions || !hasLogs) return;
+
+    const rafId = requestAnimationFrame(() => {
+      const target = vmUpdateRunState.scope === 'single'
+        ? vmUpdateInlineLogRef.current
+        : vmUpdateGlobalLogRef.current;
+      if (!target) return;
+      target.scrollTop = target.scrollHeight;
+    });
+
+    return () => cancelAnimationFrame(rafId);
+  }, [showVmSessions, vmUpdateRunState.scope, vmUpdateRunState.logs]);
 
   useEffect(() => {
     if (!showVmSessions) {
@@ -804,6 +827,8 @@ export default function App() {
     setVmUpdateAllByName({});
     setVmUpdateRunState({
       runId,
+      scope: 'all',
+      vmName: '',
       phase: 'start',
       message: 'Starting update all run...',
       totalSessions: 0,
@@ -836,6 +861,52 @@ export default function App() {
       }));
     } finally {
       setVmUpdateAllLoading(false);
+    }
+  }, [fetchVmSessions]);
+
+  const runSingleVmUpdate = useCallback(async (vmName) => {
+    const normalized = String(vmName || '').trim().toLowerCase();
+    if (!normalized) return;
+
+    const runId = createRunId();
+    vmUpdateRunIdRef.current = runId;
+    setShowVmUpdateProgressPanel(true);
+    setVmSingleUpdateLoadingName(normalized);
+    setVmUpdateAllError('');
+    setVmUpdateRunState({
+      runId,
+      scope: 'single',
+      vmName: normalized,
+      phase: 'start',
+      message: `Starting update for ${normalized}...`,
+      totalSessions: 1,
+      completedSessions: 0,
+      currentSession: normalized,
+      logs: [`[run ${runId}] starting update for ${normalized}...`]
+    });
+
+    try {
+      const response = await fetch(`/api/vm-sessions/${encodeURIComponent(normalized)}/update?runId=${encodeURIComponent(runId)}`, {
+        method: 'POST'
+      });
+      if (!response.ok) {
+        throw new Error(`Request failed (${response.status})`);
+      }
+      const data = await response.json();
+      if (data?.name && data?.updateAll) {
+        setVmUpdateAllByName((prev) => ({ ...prev, [data.name]: data.updateAll }));
+      }
+      fetchVmSessions();
+    } catch (err) {
+      setVmUpdateAllError(err?.message || `Failed to update ${normalized}`);
+      setVmUpdateRunState((prev) => ({
+        ...prev,
+        phase: 'error',
+        message: err?.message || `Failed to update ${normalized}`,
+        logs: [...(Array.isArray(prev.logs) ? prev.logs : []), `Update failed: ${err?.message || 'unknown error'}`].slice(-VM_UPDATE_LOG_LIMIT)
+      }));
+    } finally {
+      setVmSingleUpdateLoadingName('');
     }
   }, [fetchVmSessions]);
 
@@ -1147,10 +1218,11 @@ export default function App() {
   const vmUpdateProgressPct = vmUpdateProgressTotal > 0
     ? Math.max(0, Math.min(100, Math.round((vmUpdateProgressCompleted / vmUpdateProgressTotal) * 100)))
     : (vmUpdateAllLoading ? 8 : 0);
-  const shouldShowVmUpdateProgressPanel = showVmUpdateProgressPanel
+  const shouldShowVmUpdateProgressPanel = vmUpdateRunState.scope === 'all' && (showVmUpdateProgressPanel
     || vmUpdateRunState.phase === 'complete'
     || vmUpdateRunState.phase === 'error'
-    || (Array.isArray(vmUpdateRunState.logs) && vmUpdateRunState.logs.length > 0);
+    || vmUpdateRunState.phase === 'cancelled'
+    || (Array.isArray(vmUpdateRunState.logs) && vmUpdateRunState.logs.length > 0));
 
   return (
     <div className="h-dvh flex flex-col bg-slate-950 text-slate-100">
@@ -1478,26 +1550,91 @@ export default function App() {
                     </div>
                   )}
 
-                  {!vmSessionsLoading && !vmSessionsError && visibleVmSessions.map((session) => (
-                    <button
-                      key={session.name}
-                      onClick={() => {
-                        window.location.href = session.url;
-                      }}
-                      className="w-full text-left rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 hover:bg-slate-800 transition-colors"
-                    >
-                      <div className="text-sm font-medium text-slate-100">{session.name}</div>
-                      <div className="text-xs text-cyan-300 mt-0.5">{session.url}</div>
-                      <div className={`text-[11px] mt-1 ${vmUpdateTone(vmUpdatesByName[session.name])}`}>
-                        {formatVmUpdateSummary(vmUpdatesByName[session.name])}
-                      </div>
-                      {vmUpdateAllByName[session.name] && (
-                        <div className={`text-[11px] mt-1 ${vmUpdateAllTone(vmUpdateAllByName[session.name])}`}>
-                          {formatVmUpdateAllSummary(vmUpdateAllByName[session.name])}
+                  {!vmSessionsLoading && !vmSessionsError && visibleVmSessions.map((session) => {
+                    const isUpdatingThisVm = vmSingleUpdateLoadingName === session.name;
+                    const isSingleRunForVm = vmUpdateRunState.scope === 'single' && vmUpdateRunState.vmName === session.name;
+                    const showSingleVmProgress = isSingleRunForVm && (
+                      isUpdatingThisVm
+                      || vmUpdateRunState.phase === 'complete'
+                      || vmUpdateRunState.phase === 'error'
+                      || vmUpdateRunState.phase === 'cancelled'
+                      || (Array.isArray(vmUpdateRunState.logs) && vmUpdateRunState.logs.length > 0)
+                    );
+
+                    return (
+                      <div
+                        key={session.name}
+                        className="w-full rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2"
+                      >
+                        <div className="flex items-start gap-2">
+                          <button
+                            onClick={() => {
+                              window.location.href = session.url;
+                            }}
+                            className="flex-1 text-left hover:text-white transition-colors"
+                          >
+                            <div className="text-sm font-medium text-slate-100">{session.name}</div>
+                            <div className="text-xs text-cyan-300 mt-0.5">{session.url}</div>
+                            <div className={`text-[11px] mt-1 ${vmUpdateTone(vmUpdatesByName[session.name])}`}>
+                              {formatVmUpdateSummary(vmUpdatesByName[session.name])}
+                            </div>
+                            {vmUpdateAllByName[session.name] && (
+                              <div className={`text-[11px] mt-1 ${vmUpdateAllTone(vmUpdateAllByName[session.name])}`}>
+                                {formatVmUpdateAllSummary(vmUpdateAllByName[session.name])}
+                              </div>
+                            )}
+                          </button>
+                          <button
+                            onClick={() => runSingleVmUpdate(session.name)}
+                            disabled={vmUpdateAllLoading || vmUpdatesLoading || vmSessionsLoading || !!vmSingleUpdateLoadingName}
+                            className={`shrink-0 px-2.5 py-1.5 rounded-md text-xs font-medium border transition-colors ${
+                              (vmUpdateAllLoading || vmUpdatesLoading || vmSessionsLoading || !!vmSingleUpdateLoadingName)
+                                ? 'bg-slate-900 border-slate-800 text-slate-500'
+                                : 'bg-emerald-700/40 border-emerald-500/40 text-emerald-100 hover:bg-emerald-600/50'
+                            }`}
+                          >
+                            {isUpdatingThisVm ? 'Updating...' : 'Update'}
+                          </button>
                         </div>
-                      )}
-                    </button>
-                  ))}
+
+                        {showSingleVmProgress && (
+                          <div className="mt-2 rounded-md border border-emerald-500/30 bg-slate-950/70 px-2 py-2">
+                            <div className="flex items-center justify-between text-[11px] text-slate-300">
+                              <span>
+                                {vmUpdateRunState.phase === 'complete'
+                                  ? 'Update complete'
+                                  : vmUpdateRunState.phase === 'error'
+                                    ? 'Update failed'
+                                    : vmUpdateRunState.phase === 'cancelled'
+                                      ? 'Update cancelled'
+                                      : 'Updating...'}
+                              </span>
+                              <span>{vmUpdateProgressTotal > 0 ? `${vmUpdateProgressCompleted}/${vmUpdateProgressTotal}` : 'running'}</span>
+                            </div>
+                            <div className="mt-1 h-1.5 rounded-full bg-slate-800 overflow-hidden">
+                              <div
+                                className={`h-full rounded-full transition-[width] duration-200 ${
+                                  vmUpdateRunState.phase === 'error' ? 'bg-rose-400' : 'bg-emerald-400'
+                                }`}
+                                style={{ width: `${Math.max(2, vmUpdateProgressPct)}%` }}
+                              />
+                            </div>
+                            <div className="mt-1 text-[10px] text-slate-400">
+                              {vmUpdateRunState.message || 'Processing update...'}
+                            </div>
+                            <div
+                              ref={isSingleRunForVm ? vmUpdateInlineLogRef : undefined}
+                              className="mt-1 max-h-24 overflow-auto rounded border border-slate-800 bg-slate-950/90 p-1.5"
+                            >
+                              <pre className="text-[10px] leading-4 text-slate-300 whitespace-pre-wrap break-words">
+                                {(vmUpdateRunState.logs || []).join('\n') || 'No output yet.'}
+                              </pre>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
 
                 {shouldShowVmUpdateProgressPanel && (
@@ -1527,7 +1664,10 @@ export default function App() {
                     <div className="mt-2 text-[11px] text-slate-400">
                       {vmUpdateRunState.message || (vmUpdateAllLoading ? 'Updating VMs...' : 'Waiting for update status')}
                     </div>
-                    <div className="mt-2 rounded-md border border-slate-700 bg-slate-950/70 p-2 max-h-36 overflow-auto">
+                    <div
+                      ref={vmUpdateRunState.scope === 'all' ? vmUpdateGlobalLogRef : undefined}
+                      className="mt-2 rounded-md border border-slate-700 bg-slate-950/70 p-2 max-h-36 overflow-auto"
+                    >
                       <pre className="text-[10px] leading-4 text-slate-300 whitespace-pre-wrap break-words">
                         {(vmUpdateRunState.logs || []).length > 0
                           ? vmUpdateRunState.logs.join('\n')
