@@ -64,6 +64,7 @@ async function main() {
 
   const summary = [];
   const totalSteps = 11;
+  let shouldRestartService = false;
 
   const steps = [
     async () => {
@@ -87,8 +88,11 @@ async function main() {
       return ok;
     },
     async () => {
-      const cmd = "if [ -d ~/voice-terminal/.git ]; then cd ~/voice-terminal && git fetch origin main && git reset --hard origin/main && git clean -fd; else git clone https://github.com/dskill/voice-terminal.git ~/voice-terminal; fi";
+      const cmd = "if [ -d ~/voice-terminal/.git ]; then cd ~/voice-terminal && git fetch -q origin main && LOCAL=$(git rev-parse HEAD 2>/dev/null || echo \"\") && REMOTE=$(git rev-parse origin/main 2>/dev/null || echo \"\") && if [ -n \"$LOCAL\" ] && [ \"$LOCAL\" = \"$REMOTE\" ]; then echo \"SKIP:repo-up-to-date\"; else git reset --hard origin/main && git clean -fd && echo \"CHANGED:repo-updated\"; fi; else git clone https://github.com/dskill/voice-terminal.git ~/voice-terminal && echo \"CHANGED:repo-cloned\"; fi";
       const result = await runCommand(`3/${totalSteps}`, 'ssh', [...sshOptions, hostname, cmd]);
+      if ((combinedOutput(result) || '').includes('CHANGED:')) {
+        shouldRestartService = true;
+      }
       summary.push({ step: 'Clone or pull voice-terminal', ok: result.ok, detail: combinedOutput(result) || result.error });
       return result.ok;
     },
@@ -99,13 +103,44 @@ async function main() {
       return result.ok;
     },
     async () => {
-      const result = await runCommand(`5/${totalSteps}`, 'ssh', [...sshOptions, hostname, 'cd ~/voice-terminal && npm install --prefer-offline']);
+      const cmd = `cd ~/voice-terminal
+STAMP=".npm-deps-lock.sha256"
+LOCK_HASH=$(sha256sum package-lock.json | awk '{print $1}')
+if [ -d node_modules ] && [ -f "$STAMP" ] && [ "$(cat "$STAMP" 2>/dev/null)" = "$LOCK_HASH" ]; then
+  echo "SKIP:npm-deps-current"
+else
+  npm install --prefer-offline --no-audit --no-fund && printf "%s" "$LOCK_HASH" > "$STAMP" && echo "CHANGED:npm-deps-installed"
+fi`;
+      const result = await runCommand(`5/${totalSteps}`, 'ssh', [...sshOptions, hostname, cmd]);
+      if ((combinedOutput(result) || '').includes('CHANGED:')) {
+        shouldRestartService = true;
+      }
       summary.push({ step: 'Install npm deps', ok: result.ok, detail: combinedOutput(result) || result.error });
       return result.ok;
     },
     async () => {
-      const result = await runCommand(`6/${totalSteps}`, 'ssh', [...sshOptions, hostname, 'cd ~/voice-terminal && python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements-stt.txt']);
-      summary.push({ step: 'Create venv and install STT requirements', ok: result.ok, detail: combinedOutput(result) || result.error });
+      const cmd = `cd ~/voice-terminal
+CREATED=0
+if [ ! -d .venv ]; then python3 -m venv .venv && CREATED=1; fi
+. .venv/bin/activate
+MISSING=$(python - <<'PY'
+import importlib.util
+mods=['faster_whisper','piper','pathvalidate','onnxruntime']
+missing=[m for m in mods if importlib.util.find_spec(m) is None]
+print(' '.join(missing))
+PY
+)
+if [ "$CREATED" = "1" ]; then echo "CHANGED:venv-created"; fi
+if [ -n "$MISSING" ]; then
+  pip install -r requirements-stt.txt piper-tts pathvalidate && echo "CHANGED:python-deps-installed:$MISSING"
+else
+  echo "SKIP:python-deps-current"
+fi`;
+      const result = await runCommand(`6/${totalSteps}`, 'ssh', [...sshOptions, hostname, cmd]);
+      if ((combinedOutput(result) || '').includes('CHANGED:')) {
+        shouldRestartService = true;
+      }
+      summary.push({ step: 'Create venv and install STT/TTS requirements', ok: result.ok, detail: combinedOutput(result) || result.error });
       return result.ok;
     },
     async () => {
@@ -115,12 +150,30 @@ async function main() {
     },
     async () => {
       // Remove any native binary install of codex, then install latest via npm.
-      const cmd = 'sudo rm -f /usr/local/bin/codex && sudo npm install -g @openai/codex';
+      const cmd = 'if command -v codex >/dev/null 2>&1; then echo "SKIP:codex-present $(codex --version 2>/dev/null | head -n 1)"; else sudo rm -f /usr/local/bin/codex && sudo npm install -g @openai/codex && echo "CHANGED:codex-installed"; fi';
       const result = await runCommand(`8/${totalSteps}`, 'ssh', [...sshOptions, hostname, cmd]);
       summary.push({ step: 'Install/update Codex via npm', ok: result.ok, detail: combinedOutput(result) || result.error });
       return result.ok;
     },
     async () => {
+      const checkResult = await runCommand(
+        `9/${totalSteps}`,
+        'ssh',
+        [
+          ...sshOptions,
+          hostname,
+          'if [ -s ~/voice-terminal/models/piper/en_US-lessac-medium.onnx ] && [ -s ~/voice-terminal/models/piper/en_US-lessac-medium.onnx.json ]; then echo "SKIP:piper-models-present"; else echo "CHANGED:piper-models-missing"; fi'
+        ]
+      );
+      if (!checkResult.ok) {
+        summary.push({ step: 'Check Piper models', ok: false, detail: combinedOutput(checkResult) || checkResult.error });
+        return false;
+      }
+      if ((combinedOutput(checkResult) || '').includes('SKIP:piper-models-present')) {
+        summary.push({ step: 'Provision Piper models', ok: true, detail: 'Skipped (already present)' });
+        return true;
+      }
+
       let result;
       if (existsSync(localPiperModel) && existsSync(localPiperConfig)) {
         const mkdirResult = await runCommand(`9/${totalSteps}`, 'ssh', [...sshOptions, hostname, 'mkdir -p ~/voice-terminal/models/piper']);
@@ -131,6 +184,7 @@ async function main() {
           ? await runCommand(`9/${totalSteps}`, 'scp', [...sshOptions, localPiperConfig, `${hostname}:~/voice-terminal/models/piper/en_US-lessac-medium.onnx.json`])
           : { ok: false, stdout: '', stderr: '', error: 'model copy failed' };
         const ok = mkdirResult.ok && modelResult.ok && configResult.ok;
+        if (ok) shouldRestartService = true;
         const detail = [mkdirResult, modelResult, configResult].map((r, i) => `part${i + 1}: ${r.ok ? 'ok' : (combinedOutput(r) || r.error)}`).join(' | ');
         summary.push({ step: 'Provision Piper models (local copy)', ok, detail });
         return ok;
@@ -145,16 +199,30 @@ async function main() {
           'mkdir -p ~/voice-terminal/models/piper && cd ~/voice-terminal/models/piper && wget -q -O en_US-lessac-medium.onnx https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx && wget -q -O en_US-lessac-medium.onnx.json https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json'
         ]
       );
+      if (result.ok) shouldRestartService = true;
       summary.push({ step: 'Provision Piper models (remote wget)', ok: result.ok, detail: combinedOutput(result) || result.error });
       return result.ok;
     },
     async () => {
-      const result = await runCommand(`10/${totalSteps}`, 'ssh', [...sshOptions, hostname, 'cd ~/voice-terminal && npm run build']);
+      const cmd = `cd ~/voice-terminal
+HEAD=$(git rev-parse HEAD 2>/dev/null || echo "")
+STAMP="dist/.build-commit"
+if [ -n "$HEAD" ] && [ -f "$STAMP" ] && [ "$(cat "$STAMP" 2>/dev/null)" = "$HEAD" ]; then
+  echo "SKIP:build-current"
+else
+  npm run build && mkdir -p dist && printf "%s" "$HEAD" > "$STAMP" && echo "CHANGED:build-ran"
+fi`;
+      const result = await runCommand(`10/${totalSteps}`, 'ssh', [...sshOptions, hostname, cmd]);
+      if ((combinedOutput(result) || '').includes('CHANGED:')) {
+        shouldRestartService = true;
+      }
       summary.push({ step: 'Build frontend', ok: result.ok, detail: combinedOutput(result) || result.error });
       return result.ok;
     },
     async () => {
-      const cmd = "cd ~/voice-terminal && tmux kill-session -t voice-terminal 2>/dev/null; tmux new-session -d -s voice-terminal -c ~/voice-terminal 'PIPER_MODEL=$HOME/voice-terminal/models/piper/en_US-lessac-medium.onnx PIPER_MODEL_CONFIG=$HOME/voice-terminal/models/piper/en_US-lessac-medium.onnx.json . .venv/bin/activate && npm start'";
+      const cmd = shouldRestartService
+        ? "cd ~/voice-terminal && tmux kill-session -t voice-terminal 2>/dev/null; tmux new-session -d -s voice-terminal -c ~/voice-terminal 'PIPER_MODEL=$HOME/voice-terminal/models/piper/en_US-lessac-medium.onnx PIPER_MODEL_CONFIG=$HOME/voice-terminal/models/piper/en_US-lessac-medium.onnx.json . .venv/bin/activate && npm start' && echo 'CHANGED:service-restarted'"
+        : "if tmux has-session -t voice-terminal 2>/dev/null; then echo 'SKIP:service-already-running'; else cd ~/voice-terminal && tmux new-session -d -s voice-terminal -c ~/voice-terminal 'PIPER_MODEL=$HOME/voice-terminal/models/piper/en_US-lessac-medium.onnx PIPER_MODEL_CONFIG=$HOME/voice-terminal/models/piper/en_US-lessac-medium.onnx.json . .venv/bin/activate && npm start' && echo 'CHANGED:service-started'; fi";
       const result = await runCommand(`11/${totalSteps}`, 'ssh', [...sshOptions, hostname, cmd]);
       summary.push({ step: 'Start voice-terminal tmux session', ok: result.ok, detail: combinedOutput(result) || result.error });
       return result.ok;
