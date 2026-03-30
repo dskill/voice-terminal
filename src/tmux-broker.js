@@ -333,16 +333,14 @@ async function cmdSendInput(opts) {
     if (hasPayload) {
       const bufferName = `voice_terminal_${randomUUID().replace(/-/g, '')}`;
       await runTmux(['load-buffer', '-b', bufferName, '-'], { input: payload });
+      // Use -p so bracketed paste-aware apps (like Claude Code) can safely handle large payloads.
+      await runTmux(['paste-buffer', '-d', '-r', '-p', '-b', bufferName, '-t', resolved.target]);
       if (pressEnter) {
-        // Keep submit separate from pasted content so line editors treat Enter as a real keypress.
-        // Use -p so bracketed paste-aware apps (like Codex panes) can safely handle large payloads.
-        await runTmux([
-          'paste-buffer', '-d', '-r', '-p', '-b', bufferName, '-t', resolved.target,
-          ';',
-          'send-keys', '-t', resolved.target, SUBMIT_KEY
-        ]);
-      } else {
-        await runTmux(['paste-buffer', '-d', '-r', '-p', '-b', bufferName, '-t', resolved.target]);
+        // Delay before Enter so the TUI app (React/ink) finishes processing the
+        // bracketed paste before we submit.  Without this, Enter arrives before
+        // the paste is committed to the input buffer and gets swallowed.
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        await runTmux(['send-keys', '-t', resolved.target, SUBMIT_KEY]);
       }
     } else if (pressEnter) {
       await runTmux(['send-keys', '-t', resolved.target, SUBMIT_KEY]);
