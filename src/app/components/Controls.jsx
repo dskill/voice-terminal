@@ -5,8 +5,8 @@ function StatusBadge({ label, connected }) {
     <span
       className={`px-2 py-0.5 rounded text-[0.65rem] font-medium ${
         connected
-          ? 'bg-cyan-900/30 text-cyan-300 border border-cyan-700/30'
-          : 'bg-rose-900/30 text-rose-300 border border-rose-700/30'
+          ? 'bg-emerald-950/40 text-emerald-400 border border-emerald-800/30'
+          : 'bg-red-950/30 text-red-400 border border-red-900/30'
       }`}
     >
       {label}
@@ -28,7 +28,7 @@ export default function Controls({
   ) ? 'LLM' : orchestratorLabel;
 
   return (
-    <div className="flex items-center justify-center gap-2 flex-wrap px-3 py-3">
+    <div className="flex items-center justify-center gap-2 flex-wrap px-3 py-2">
       <StatusBadge label={`WS: ${isConnected ? 'On' : 'Off'}`} connected={isConnected} />
       <StatusBadge
         label={`${statusOrchestratorLabel}: ${sessionRunning ? 'On' : 'Off'}`}

@@ -1,17 +1,17 @@
 import React from 'react';
 
 export default function MicButton({ isRecording, audioLevel = 0, isProcessing, isSendMode, disabled, onClick, onCancel, onLongPress }) {
-  let bgClass = 'bg-gradient-to-br from-slate-700 to-slate-900 shadow-slate-900/40';
+  let bgClass = 'bg-gradient-to-br from-zinc-600 to-zinc-800 shadow-zinc-900/40 border border-zinc-500/20';
   let extraClass = '';
 
   if (isRecording) {
-    bgClass = 'bg-gradient-to-br from-rose-500 to-red-700 shadow-red-700/45 scale-110';
+    bgClass = 'bg-gradient-to-br from-rose-500 to-red-700 shadow-red-900/50 scale-110 border border-rose-400/30';
     extraClass = 'animate-pulse-recording';
   } else if (isProcessing) {
-    bgClass = 'bg-gradient-to-br from-indigo-600 to-indigo-800 shadow-indigo-700/35';
+    bgClass = 'bg-gradient-to-br from-indigo-600 to-indigo-800 shadow-indigo-900/40 border border-indigo-500/25';
     extraClass = 'animate-pulse';
   } else if (isSendMode) {
-    bgClass = 'bg-gradient-to-br from-cyan-600 to-cyan-800 shadow-cyan-700/35';
+    bgClass = 'bg-gradient-to-br from-cyan-600 to-cyan-800 shadow-cyan-900/40 border border-cyan-500/25';
   }
 
   const micIcon = (
@@ -108,7 +108,8 @@ export default function MicButton({ isRecording, audioLevel = 0, isProcessing, i
       className={`
         relative w-20 h-20 rounded-full flex items-center justify-center
         text-white shadow-lg transition-all duration-200
-        disabled:opacity-40 disabled:cursor-not-allowed disabled:animate-none
+        hover:brightness-110 active:scale-95
+        disabled:opacity-40 disabled:cursor-not-allowed disabled:animate-none disabled:hover:brightness-100
         touch-none
         ${bgClass} ${extraClass}
       `}
@@ -132,7 +133,7 @@ export default function MicButton({ isRecording, audioLevel = 0, isProcessing, i
                 }}
               >
                 <span
-                  className="block w-[3px] rounded-full bg-rose-300/95 shadow-[0_0_10px_rgba(251,113,133,0.9)] transition-[height] duration-75 absolute pointer-events-none"
+                  className="block w-[3px] rounded-full bg-rose-300/90 shadow-[0_0_10px_rgba(251,113,133,0.8)] transition-[height] duration-75 absolute pointer-events-none"
                   style={{ height: `${height}px`, bottom: '44px' }}
                 />
               </div>

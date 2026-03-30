@@ -46,25 +46,25 @@ export default function LoadingOverlay({ onStart }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-slate-950/95 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-zinc-950/98 backdrop-blur-sm">
       <div className="flex flex-col items-center gap-6 max-w-lg w-full px-6">
-        <h1 className="text-2xl font-semibold text-slate-100">Voice Boss</h1>
+        <h1 className="text-2xl font-semibold text-zinc-100">Voice Terminal</h1>
 
         <button
           onClick={handleStart}
           disabled={status === 'initializing'}
-          className="px-8 py-4 text-lg font-medium rounded-xl bg-gradient-to-r from-blue-500 to-blue-700 text-white shadow-lg shadow-blue-500/30 hover:shadow-blue-500/50 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+          className="px-8 py-4 text-lg font-medium rounded-xl bg-gradient-to-r from-cyan-600 to-cyan-800 text-white shadow-lg shadow-cyan-900/30 hover:shadow-cyan-800/40 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {status === 'idle' && 'Start Voice Boss'}
+          {status === 'idle' && 'Initialize'}
           {status === 'initializing' && 'Initializing...'}
-          {status === 'error' && 'Failed — Try Again'}
+          {status === 'error' && 'Failed — Retry'}
           {status === 'ready' && 'Starting...'}
         </button>
 
         {logs.length > 0 && (
-          <div className="w-full max-h-64 overflow-y-auto rounded-lg bg-slate-900 border border-slate-700 p-3 font-mono text-xs leading-relaxed">
+          <div className="w-full max-h-64 overflow-y-auto rounded-lg bg-zinc-900 border border-zinc-800 p-3 font-mono text-xs leading-relaxed">
             {logs.map((log, i) => (
-              <div key={i} className={log.isError ? 'text-red-400' : 'text-emerald-400'}>
+              <div key={i} className={log.isError ? 'text-red-400' : 'text-emerald-400/80'}>
                 {log.text}
               </div>
             ))}

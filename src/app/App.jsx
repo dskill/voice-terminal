@@ -72,13 +72,13 @@ function formatVmUpdateSummary(update) {
 }
 
 function vmUpdateTone(update) {
-  if (!update) return 'text-slate-400';
-  if (update.error) return 'text-rose-300';
-  if (!update.serverRunning) return 'text-rose-300';
-  if (update.ttsHealthy === false) return 'text-amber-300';
-  if (update.gitState === 'behind' || update.gitState === 'diverged') return 'text-amber-300';
-  if (update.gitState === 'up-to-date') return 'text-emerald-300';
-  return 'text-slate-300';
+  if (!update) return 'text-zinc-400';
+  if (update.error) return 'text-red-400/80';
+  if (!update.serverRunning) return 'text-red-400/80';
+  if (update.ttsHealthy === false) return 'text-amber-400/70';
+  if (update.gitState === 'behind' || update.gitState === 'diverged') return 'text-amber-400/70';
+  if (update.gitState === 'up-to-date') return 'text-emerald-400/70';
+  return 'text-zinc-400';
 }
 
 function formatVmUpdateAllSummary(result) {
@@ -88,8 +88,8 @@ function formatVmUpdateAllSummary(result) {
 }
 
 function vmUpdateAllTone(result) {
-  if (!result) return 'text-slate-400';
-  return result.success ? 'text-emerald-300' : 'text-rose-300';
+  if (!result) return 'text-zinc-400';
+  return result.success ? 'text-emerald-400/70' : 'text-red-400/80';
 }
 
 const VOICE_BOSS_URL = 'https://voiceboss.exe.xyz:3456/';
@@ -1288,7 +1288,7 @@ export default function App() {
   const totalUnreadCompletions = Object.values(tmuxUnreadCompletions).reduce((sum, value) => sum + Number(value || 0), 0);
   const activeTmuxStatus = activeTmuxSession ? tmuxStatusBySession[activeTmuxSession] : null;
   const activeStatusText = activeTmuxStatus?.state === 'working' ? 'Working' : 'Idle';
-  const activeStatusDot = activeTmuxStatus?.state === 'working' ? 'bg-emerald-400' : 'bg-slate-500';
+  const activeStatusDot = activeTmuxStatus?.state === 'working' ? 'bg-emerald-400' : 'bg-zinc-500';
   const isMicInCancelMode = isProcessing || tts.isSpeaking;
   const micStatusText = tts.isSpeaking ? 'Speaking...' : liveText;
   const isUploading = uploadState?.status === 'uploading';
@@ -1306,11 +1306,11 @@ export default function App() {
     || (Array.isArray(vmUpdateRunState.logs) && vmUpdateRunState.logs.length > 0));
 
   return (
-    <div className="h-dvh flex flex-col bg-slate-950 text-slate-100">
+    <div className="h-dvh flex flex-col bg-zinc-950 text-zinc-300">
       <div className="absolute top-2 left-3 z-30 flex items-center gap-2">
         <button
           onClick={openVmSessionsModal}
-          className="w-9 h-9 rounded-md bg-slate-800/85 text-slate-300 border border-slate-600/50 hover:bg-slate-700 hover:text-white transition-colors flex items-center justify-center"
+          className="w-9 h-9 rounded-md bg-zinc-800/85 text-zinc-300 border border-zinc-600/50 hover:bg-zinc-700 hover:text-white transition-colors flex items-center justify-center"
           title="Switch VM session"
         >
           <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
@@ -1323,7 +1323,7 @@ export default function App() {
       <div className="absolute top-2 right-3 z-30 flex items-center gap-2">
         <button
           onClick={() => setShowSettings(true)}
-          className="w-9 h-9 rounded-md bg-slate-800/85 text-slate-300 border border-slate-600/50 hover:bg-slate-700 hover:text-white transition-colors flex items-center justify-center"
+          className="w-9 h-9 rounded-md bg-zinc-800/85 text-zinc-300 border border-zinc-600/50 hover:bg-zinc-700 hover:text-white transition-colors flex items-center justify-center"
           title="Open settings"
         >
           <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
@@ -1332,7 +1332,7 @@ export default function App() {
         </button>
       </div>
 
-      <div className="relative z-20 flex items-center justify-center border-b border-slate-800/80 bg-slate-900/90 backdrop-blur-sm">
+      <div className="relative z-20 flex items-center justify-center border-b border-zinc-800/80 bg-zinc-900/90 backdrop-blur-sm">
         <Controls
           isConnected={ws.isConnected}
           sessionRunning={ws.sessionRunning}
@@ -1346,7 +1346,7 @@ export default function App() {
         <TranscriptArea messages={messages} streamingMessage={streamingMessage} />
 
         <div
-          className="relative z-20 flex-shrink-0 flex flex-col items-center gap-3 pt-4 border-t border-slate-800/70 mt-4"
+          className="relative z-20 flex-shrink-0 flex flex-col items-center gap-3 pt-4 border-t border-zinc-800/70 mt-4"
           onPointerDown={(e) => e.stopPropagation()}
         >
           {ttsEnabled && !tts.isAudioUnlocked && (
@@ -1356,18 +1356,18 @@ export default function App() {
                   e.preventDefault();
                   handleEnableAudio();
                 }}
-                className="w-full px-4 py-3 rounded-lg border border-amber-500/40 bg-amber-900/40 text-amber-100 text-sm font-semibold hover:bg-amber-800/50 transition-colors"
+                className="w-full px-4 py-3 rounded-lg border border-amber-500/40 bg-amber-900/30 text-amber-100 text-sm font-semibold hover:bg-amber-800/40 transition-colors"
                 title={`Tap to enable audio output (AudioContext: ${tts.audioContextState})`}
               >
                 Tap to enable audio
               </button>
-              <div className="mt-1 text-[11px] text-amber-200/80 text-center">
+              <div className="mt-1 text-[11px] text-amber-200/60 text-center">
                 AudioContext state: {tts.audioContextState}
               </div>
             </div>
           )}
 
-          <div className="text-xs text-slate-500 text-center flex items-center gap-2">
+          <div className="text-xs text-zinc-500 text-center flex items-center gap-2">
             <span>Active tmux: {activeTmuxSession || 'none'}</span>
             {activeTmuxSession && (
               <>
@@ -1376,14 +1376,14 @@ export default function App() {
               </>
             )}
             {doneFlashVisible && activeTmuxSession && (
-              <span className="px-1.5 py-0.5 rounded bg-cyan-600/85 text-cyan-50 text-[10px] font-semibold">
+              <span className="px-1.5 py-0.5 rounded bg-emerald-800/60 text-emerald-300 text-[10px] font-semibold">
                 Done
               </span>
             )}
           </div>
 
           {ttsEnabled && ws.serverTTSEnabled === false && (
-            <div className="text-[11px] text-rose-300 text-center">
+            <div className="text-[11px] text-red-400/70 text-center">
               Server audio state is OFF (resync pending)
             </div>
           )}
@@ -1395,7 +1395,7 @@ export default function App() {
           )}
 
           {micStatusText && !showInput && (
-            <div className="text-sm text-slate-300 text-center min-h-[1.5em] px-4">
+            <div className="text-sm text-zinc-300 text-center min-h-[1.5em] px-4">
               {micStatusText}
             </div>
           )}
@@ -1403,10 +1403,10 @@ export default function App() {
           {uploadState && (
             <div className={`w-full max-w-lg rounded-xl border px-4 py-3 ${
               uploadState.status === 'error'
-                ? 'border-rose-500/40 bg-rose-950/40 text-rose-100'
+                ? 'border-red-900/40 bg-red-950/20 text-red-300/80'
                 : uploadState.status === 'success'
-                  ? 'border-emerald-500/30 bg-emerald-950/30 text-emerald-50'
-                  : 'border-cyan-500/30 bg-slate-900 text-slate-100'
+                  ? 'border-emerald-900/30 bg-emerald-950/20 text-emerald-300/80'
+                  : 'border-zinc-700/40 bg-zinc-900/50 text-zinc-300'
             }`}>
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
@@ -1432,8 +1432,8 @@ export default function App() {
                   disabled={isUploading}
                   className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${
                     isUploading
-                      ? 'bg-slate-800/60 text-slate-500'
-                      : 'bg-slate-800/80 text-slate-300 hover:bg-slate-700 hover:text-white'
+                      ? 'bg-zinc-800/60 text-zinc-500'
+                      : 'bg-zinc-800/80 text-zinc-300 hover:bg-zinc-700 hover:text-white'
                   }`}
                   title={isUploading ? 'Upload in progress' : 'Dismiss upload status'}
                 >
@@ -1445,13 +1445,13 @@ export default function App() {
 
               {uploadState.status === 'uploading' && (
                 <div className="mt-3">
-                  <div className="flex items-center justify-between text-xs text-slate-300">
+                  <div className="flex items-center justify-between text-xs text-zinc-300">
                     <span>Sending to server</span>
                     <span>{Math.max(0, Math.min(100, uploadState.progress || 0))}%</span>
                   </div>
-                  <div className="mt-1 h-2 rounded-full bg-slate-800 overflow-hidden">
+                  <div className="mt-1 h-2 rounded-full bg-zinc-800 overflow-hidden">
                     <div
-                      className="h-full rounded-full bg-cyan-400 transition-[width] duration-150"
+                      className="h-full rounded-full bg-zinc-500 transition-[width] duration-150"
                       style={{ width: `${Math.max(4, Math.min(100, uploadState.progress || 0))}%` }}
                     />
                   </div>
@@ -1485,14 +1485,14 @@ export default function App() {
                     e.preventDefault();
                     openSessionMenu();
                   }}
-                  className="relative w-12 h-12 rounded-full flex items-center justify-center bg-slate-900 border border-slate-700 text-slate-200 hover:bg-slate-800 transition-colors touch-none select-none"
+                  className="relative w-12 h-12 rounded-full flex items-center justify-center bg-zinc-900 border border-zinc-700 text-zinc-200 hover:bg-zinc-800 transition-colors touch-none select-none"
                   title="Open tmux session selector"
                 >
                   <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
                     <path d="M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zm0 2v10h16V7H4zm2 2h6v2H6V9zm0 4h9v2H6v-2z" />
                   </svg>
                   {totalUnreadCompletions > 0 && (
-                    <span className="absolute -top-1 -right-1 min-w-[1.1rem] h-[1.1rem] px-1 rounded-full bg-cyan-500 text-[10px] leading-[1.1rem] text-white font-semibold text-center">
+                    <span className="absolute -top-1 -right-1 min-w-[1.1rem] h-[1.1rem] px-1 rounded-full bg-zinc-500 text-[10px] leading-[1.1rem] text-white font-semibold text-center">
                       {totalUnreadCompletions > 9 ? '9+' : totalUnreadCompletions}
                     </span>
                   )}
@@ -1514,7 +1514,7 @@ export default function App() {
                     e.preventDefault();
                     openKeyboardInput();
                   }}
-                  className="w-12 h-12 rounded-full flex items-center justify-center bg-slate-900 border border-slate-700 text-slate-200 hover:bg-slate-800 transition-colors touch-none select-none"
+                  className="w-12 h-12 rounded-full flex items-center justify-center bg-zinc-900 border border-zinc-700 text-zinc-200 hover:bg-zinc-800 transition-colors touch-none select-none"
                   title="Type input"
                 >
                   <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
@@ -1528,16 +1528,16 @@ export default function App() {
               htmlFor="file-upload-input"
               className={`w-12 h-12 rounded-full flex items-center justify-center border transition-colors select-none ${
                 isUploading
-                  ? 'bg-slate-900/60 border-slate-800 text-slate-500 cursor-not-allowed pointer-events-none'
-                  : 'bg-slate-900 border-slate-700 text-slate-200 hover:bg-slate-800 cursor-pointer'
+                  ? 'bg-zinc-900/60 border-zinc-800 text-zinc-500 cursor-not-allowed pointer-events-none'
+                  : 'bg-zinc-900 border-zinc-700 text-zinc-200 hover:bg-zinc-800 cursor-pointer'
               }`}
               title={isUploading ? 'Upload in progress' : 'Upload file'}
             >
               {isUploading ? (
                 <div className="relative w-5 h-5">
-                  <div className="absolute inset-0 rounded-full border-2 border-slate-700" />
+                  <div className="absolute inset-0 rounded-full border-2 border-zinc-700" />
                   <div
-                    className="absolute inset-0 rounded-full border-2 border-cyan-400 border-t-transparent"
+                    className="absolute inset-0 rounded-full border-2 border-zinc-400 border-t-transparent"
                     style={{ transform: `rotate(${Math.round((uploadState.progress || 0) * 3.6)}deg)` }}
                   />
                 </div>
@@ -1579,20 +1579,20 @@ export default function App() {
       />
 
       {showVmSessions && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm" onClick={() => setShowVmSessions(false)}>
+        <div className="fixed inset-0 z-50 bg-zinc-950/80 backdrop-blur-sm" onClick={() => setShowVmSessions(false)}>
           <div className="absolute inset-0 flex items-center justify-center p-4 pointer-events-none">
             <div
-              className="w-full max-w-md rounded-2xl border border-slate-700 bg-slate-900/95 shadow-2xl pointer-events-auto"
+              className="w-full max-w-md rounded-2xl border border-zinc-700 bg-zinc-900/95 shadow-2xl pointer-events-auto"
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="px-5 py-4 border-b border-slate-800 flex items-start justify-between gap-3">
+              <div className="px-5 py-4 border-b border-zinc-800 flex items-start justify-between gap-3">
                 <div>
-                  <div className="text-base font-semibold text-slate-100">VM Sessions</div>
-                  <div className="text-xs text-slate-400 mt-1">Jump to another voice-terminal VM.</div>
+                  <div className="text-base font-semibold text-zinc-100">VM Sessions</div>
+                  <div className="text-xs text-zinc-400 mt-1">Jump to another voice-terminal VM.</div>
                 </div>
                 <button
                   onClick={() => setShowVmSessions(false)}
-                  className="w-8 h-8 rounded-md bg-slate-800/80 border border-slate-700 text-slate-300 hover:bg-slate-700 hover:text-white transition-colors"
+                  className="w-8 h-8 rounded-md bg-zinc-800/80 border border-zinc-700 text-zinc-300 hover:bg-zinc-700 hover:text-white transition-colors"
                   title="Close VM sessions"
                 >
                   <svg className="w-4 h-4 mx-auto" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
@@ -1604,29 +1604,29 @@ export default function App() {
               <div className="p-4 flex flex-col space-y-3 max-h-[60vh]">
                 <div className="space-y-3 min-h-0 overflow-auto flex-1">
                   {vmSessionsLoading && (
-                    <div className="text-sm text-slate-300">Loading VM sessions...</div>
+                    <div className="text-sm text-zinc-300">Loading VM sessions...</div>
                   )}
 
                   {!vmSessionsLoading && vmSessionsError && (
-                    <div className="rounded-lg border border-rose-600/40 bg-rose-950/40 px-3 py-2 text-sm text-rose-100">
+                    <div className="rounded-lg border border-red-900/40 bg-red-950/20 px-3 py-2 text-sm text-red-300/80">
                       {vmSessionsError}
                     </div>
                   )}
 
                   {!vmSessionsLoading && !vmSessionsError && vmUpdatesError && (
-                    <div className="rounded-lg border border-rose-600/40 bg-rose-950/40 px-3 py-2 text-sm text-rose-100">
+                    <div className="rounded-lg border border-red-900/40 bg-red-950/20 px-3 py-2 text-sm text-red-300/80">
                       {vmUpdatesError}
                     </div>
                   )}
 
                   {!vmSessionsLoading && !vmSessionsError && vmUpdateAllError && (
-                    <div className="rounded-lg border border-rose-600/40 bg-rose-950/40 px-3 py-2 text-sm text-rose-100">
+                    <div className="rounded-lg border border-red-900/40 bg-red-950/20 px-3 py-2 text-sm text-red-300/80">
                       {vmUpdateAllError}
                     </div>
                   )}
 
                   {!vmSessionsLoading && !vmSessionsError && visibleVmSessions.length === 0 && (
-                    <div className="rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 text-sm text-slate-300">
+                    <div className="rounded-lg border border-zinc-700 bg-zinc-900/70 px-3 py-2 text-sm text-zinc-300">
                       No VMs with voice-terminal detected.
                     </div>
                   )}
@@ -1648,17 +1648,17 @@ export default function App() {
                     return (
                       <div
                         key={session.name}
-                        className="w-full rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2"
+                        className="w-full rounded-lg border border-zinc-700 bg-zinc-900/70 px-3 py-2"
                       >
                         <div className="flex items-start gap-2">
                           <button
                             onClick={() => {
                               window.location.href = session.url;
                             }}
-                            className="flex-1 text-left hover:text-white transition-colors"
+                            className="flex-1 text-left rounded-md px-2 py-1 -mx-2 -my-1 hover:bg-zinc-800/70 hover:text-white transition-colors"
                           >
-                            <div className="text-sm font-medium text-slate-100">{session.name}</div>
-                            <div className="text-xs text-cyan-300 mt-0.5">{session.url}</div>
+                            <div className="text-sm font-medium text-zinc-100">{session.name}</div>
+                            <div className="text-xs text-zinc-400 mt-0.5">{session.url}</div>
                             <div className={`text-[11px] mt-1 ${vmUpdateTone(vmUpdatesByName[session.name])}`}>
                               {formatVmUpdateSummary(vmUpdatesByName[session.name])}
                             </div>
@@ -1683,8 +1683,8 @@ export default function App() {
                                 || vmSessionsLoading
                                 || !!vmSingleUpdateLoadingName
                                 || !!vmSingleAuthLoadingName)
-                                ? 'bg-slate-900 border-slate-800 text-slate-500'
-                                : 'bg-emerald-700/40 border-emerald-500/40 text-emerald-100 hover:bg-emerald-600/50'
+                                ? 'bg-zinc-900 border-zinc-800 text-zinc-500'
+                                : 'bg-zinc-700/40 border-zinc-600/40 text-zinc-200 hover:bg-zinc-600/50'
                             }`}
                           >
                             {isUpdatingThisVm ? 'Updating...' : 'Update'}
@@ -1704,8 +1704,8 @@ export default function App() {
                                 || vmSessionsLoading
                                 || !!vmSingleUpdateLoadingName
                                 || !!vmSingleAuthLoadingName)
-                                ? 'bg-slate-900 border-slate-800 text-slate-500'
-                                : 'bg-cyan-700/50 border-cyan-500/40 text-cyan-100 hover:bg-cyan-600/60'
+                                ? 'bg-zinc-900 border-zinc-800 text-zinc-500'
+                                : 'bg-zinc-700/50 border-zinc-600/40 text-zinc-200 hover:bg-zinc-600/60'
                             }`}
                           >
                             {isUpdatingAuthThisVm ? 'Updating...' : 'Update Auth'}
@@ -1713,8 +1713,8 @@ export default function App() {
                         </div>
 
                         {showSingleVmProgress && (
-                          <div className="mt-2 rounded-md border border-emerald-500/30 bg-slate-950/70 px-2 py-2">
-                            <div className="flex items-center justify-between gap-2 text-[11px] text-slate-300">
+                          <div className="mt-2 rounded-md border border-zinc-700/30 bg-zinc-950/70 px-2 py-2">
+                            <div className="flex items-center justify-between gap-2 text-[11px] text-zinc-300">
                               <span className="min-w-0">
                                 {vmUpdateRunState.phase === 'complete'
                                   ? `${singleRunActionLabel} complete`
@@ -1728,7 +1728,7 @@ export default function App() {
                                 <span>{vmUpdateProgressTotal > 0 ? `${vmUpdateProgressCompleted}/${vmUpdateProgressTotal}` : 'running'}</span>
                                 <button
                                   onClick={() => setShowVmUpdateProgressPanel(false)}
-                                  className="w-5 h-5 rounded-full flex items-center justify-center border border-slate-700 bg-slate-900 text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                                  className="w-5 h-5 rounded-full flex items-center justify-center border border-zinc-700 bg-zinc-900 text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
                                   title="Dismiss"
                                 >
                                   <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
@@ -1737,22 +1737,22 @@ export default function App() {
                                 </button>
                               </div>
                             </div>
-                            <div className="mt-1 h-1.5 rounded-full bg-slate-800 overflow-hidden">
+                            <div className="mt-1 h-1.5 rounded-full bg-zinc-800 overflow-hidden">
                               <div
                                 className={`h-full rounded-full transition-[width] duration-200 ${
-                                  vmUpdateRunState.phase === 'error' ? 'bg-rose-400' : 'bg-emerald-400'
+                                  vmUpdateRunState.phase === 'error' ? 'bg-red-400' : 'bg-emerald-400'
                                 }`}
                                 style={{ width: `${Math.max(2, vmUpdateProgressPct)}%` }}
                               />
                             </div>
-                            <div className="mt-1 text-[10px] text-slate-400">
+                            <div className="mt-1 text-[10px] text-zinc-400">
                               {vmUpdateRunState.message || 'Processing update...'}
                             </div>
                             <div
                               ref={isSingleRunForVm ? vmUpdateInlineLogRef : undefined}
-                              className="mt-1 max-h-24 overflow-auto rounded border border-slate-800 bg-slate-950/90 p-1.5"
+                              className="mt-1 max-h-24 overflow-auto rounded border border-zinc-800 bg-zinc-950/90 p-1.5"
                             >
-                              <pre className="text-[10px] leading-4 text-slate-300 whitespace-pre-wrap break-words">
+                              <pre className="text-[10px] leading-4 text-zinc-300 whitespace-pre-wrap break-words">
                                 {(vmUpdateRunState.logs || []).join('\n') || 'No output yet.'}
                               </pre>
                             </div>
@@ -1764,8 +1764,8 @@ export default function App() {
                 </div>
 
                 {shouldShowVmUpdateProgressPanel && (
-                  <div className="rounded-lg border border-cyan-500/30 bg-slate-900/80 px-3 py-3">
-                    <div className="flex items-center justify-between text-xs text-slate-300">
+                  <div className="rounded-lg border border-zinc-700/40 bg-zinc-900/80 px-3 py-3">
+                    <div className="flex items-center justify-between text-xs text-zinc-300">
                       <span>
                         {vmUpdateRunState.phase === 'complete'
                           ? 'Update all complete'
@@ -1779,22 +1779,22 @@ export default function App() {
                           : (vmUpdateAllLoading ? 'running' : 'idle')}
                       </span>
                     </div>
-                    <div className="mt-2 h-2 rounded-full bg-slate-800 overflow-hidden">
+                    <div className="mt-2 h-2 rounded-full bg-zinc-800 overflow-hidden">
                       <div
                         className={`h-full rounded-full transition-[width] duration-200 ${
-                          vmUpdateRunState.phase === 'error' ? 'bg-rose-400' : 'bg-cyan-400'
+                          vmUpdateRunState.phase === 'error' ? 'bg-red-400' : 'bg-zinc-400'
                         }`}
                         style={{ width: `${vmUpdateProgressPct}%` }}
                       />
                     </div>
-                    <div className="mt-2 text-[11px] text-slate-400">
+                    <div className="mt-2 text-[11px] text-zinc-400">
                       {vmUpdateRunState.message || (vmUpdateAllLoading ? 'Updating VMs...' : 'Waiting for update status')}
                     </div>
                     <div
                       ref={vmUpdateRunState.scope === 'all' ? vmUpdateGlobalLogRef : undefined}
-                      className="mt-2 rounded-md border border-slate-700 bg-slate-950/70 p-2 max-h-36 overflow-auto"
+                      className="mt-2 rounded-md border border-zinc-700 bg-zinc-950/70 p-2 max-h-36 overflow-auto"
                     >
-                      <pre className="text-[10px] leading-4 text-slate-300 whitespace-pre-wrap break-words">
+                      <pre className="text-[10px] leading-4 text-zinc-300 whitespace-pre-wrap break-words">
                         {(vmUpdateRunState.logs || []).length > 0
                           ? vmUpdateRunState.logs.join('\n')
                           : 'No output yet.'}
@@ -1807,7 +1807,7 @@ export default function App() {
                   <div className="px-4 pb-4">
                     <a
                       href={VOICE_BOSS_URL}
-                      className="w-full inline-flex items-center justify-center px-3 py-2 rounded-lg text-sm font-medium border border-cyan-500/40 bg-cyan-700/50 text-cyan-100 hover:bg-cyan-600/60 transition-colors"
+                      className="w-full inline-flex items-center justify-center px-3 py-2 rounded-lg text-sm font-medium border border-zinc-600/40 bg-zinc-700/50 text-zinc-200 hover:bg-zinc-600/60 transition-colors"
                     >
                       Go to Voice Boss
                     </a>
@@ -1819,8 +1819,8 @@ export default function App() {
                       disabled={vmSessionsLoading}
                       className={`w-full px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
                         vmSessionsLoading
-                          ? 'bg-slate-900 border-slate-800 text-slate-500'
-                          : 'bg-slate-700/70 border-slate-500/50 text-slate-100 hover:bg-slate-600/80'
+                          ? 'bg-zinc-900 border-zinc-800 text-zinc-500'
+                          : 'bg-zinc-700/70 border-zinc-500/50 text-zinc-100 hover:bg-zinc-600/80'
                       }`}
                     >
                       Refresh
@@ -1830,8 +1830,8 @@ export default function App() {
                       disabled={vmUpdatesLoading || vmUpdateAllLoading || vmSessionsLoading || visibleVmSessions.length === 0}
                       className={`w-full px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
                         (vmUpdatesLoading || vmUpdateAllLoading || vmSessionsLoading || visibleVmSessions.length === 0)
-                          ? 'bg-slate-900 border-slate-800 text-slate-500'
-                          : 'bg-cyan-700/50 border-cyan-500/40 text-cyan-100 hover:bg-cyan-600/60'
+                          ? 'bg-zinc-900 border-zinc-800 text-zinc-500'
+                          : 'bg-zinc-700/50 border-zinc-600/40 text-zinc-200 hover:bg-zinc-600/60'
                       }`}
                     >
                       {vmUpdatesLoading ? 'Checking...' : 'Check Updates'}
@@ -1841,8 +1841,8 @@ export default function App() {
                       disabled={vmUpdateAllLoading || vmUpdatesLoading || vmSessionsLoading || visibleVmSessions.length === 0}
                       className={`w-full px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
                         (vmUpdateAllLoading || vmUpdatesLoading || vmSessionsLoading || visibleVmSessions.length === 0)
-                          ? 'bg-slate-900 border-slate-800 text-slate-500'
-                          : 'bg-emerald-700/40 border-emerald-500/40 text-emerald-100 hover:bg-emerald-600/50'
+                          ? 'bg-zinc-900 border-zinc-800 text-zinc-500'
+                          : 'bg-zinc-700/40 border-zinc-600/40 text-zinc-200 hover:bg-zinc-600/50'
                       }`}
                     >
                       {vmUpdateAllLoading ? 'Updating...' : 'Update All'}

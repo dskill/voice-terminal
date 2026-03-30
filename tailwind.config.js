@@ -16,8 +16,8 @@ export default {
           '50%': { transform: 'scale(1.05)', boxShadow: '0 0 20px 10px rgba(239, 68, 68, 0.2)' },
         },
         'glow': {
-          '0%, 100%': { boxShadow: '0 0 15px rgba(59, 130, 246, 0.4)' },
-          '50%': { boxShadow: '0 0 30px rgba(59, 130, 246, 0.6)' },
+          '0%, 100%': { boxShadow: '0 0 12px rgba(161, 161, 170, 0.15)' },
+          '50%': { boxShadow: '0 0 24px rgba(161, 161, 170, 0.25)' },
         },
       },
     },

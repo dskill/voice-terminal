@@ -9,10 +9,10 @@ function SessionPill({ label, sublabel, active, onClick, plus = false, state = n
       onClick={onClick}
       className={`w-full rounded-2xl border shadow-lg px-4 py-3 text-left transition-colors ${
         active
-          ? 'bg-cyan-800/65 border-cyan-500/60 text-white'
+          ? 'bg-zinc-800/80 border-zinc-500/50 text-zinc-100'
           : plus
-            ? 'bg-indigo-800/65 border-indigo-500/50 text-white hover:bg-indigo-700/70'
-            : 'bg-slate-900/90 border-slate-700 text-slate-100 hover:bg-slate-800/90'
+            ? 'bg-zinc-900/70 border-zinc-600/40 text-zinc-300 hover:bg-zinc-800/70'
+            : 'bg-zinc-950/70 border-zinc-800/50 text-zinc-300 hover:bg-zinc-900/80'
       }`}
     >
       <div className="flex items-center justify-between gap-2">
@@ -24,7 +24,7 @@ function SessionPill({ label, sublabel, active, onClick, plus = false, state = n
                 e.stopPropagation();
                 onReview();
               }}
-              className="px-3 h-8 rounded-lg bg-slate-800/90 hover:bg-slate-700 text-cyan-200 border border-slate-600/60 flex items-center justify-center text-xs font-semibold"
+              className="px-3 h-8 rounded-lg bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 border border-zinc-600/60 flex items-center justify-center text-xs font-semibold"
               title="Review this session"
             >
               Review
@@ -34,12 +34,12 @@ function SessionPill({ label, sublabel, active, onClick, plus = false, state = n
             <div className="flex items-center gap-1.5 shrink-0">
               {showStatus && (
                 <span
-                  className={`inline-block w-2 h-2 rounded-full ${isWorking ? 'bg-emerald-400' : 'bg-slate-400'}`}
+                  className={`inline-block w-2 h-2 rounded-full ${isWorking ? 'bg-emerald-400' : 'bg-zinc-400'}`}
                   title={isWorking ? 'Working' : 'Idle'}
                 />
               )}
               {unreadCount > 0 && (
-                <span className="min-w-[1.1rem] h-[1.1rem] px-1 rounded-full bg-cyan-500 text-[10px] leading-[1.1rem] text-white font-semibold text-center">
+                <span className="min-w-[1.1rem] h-[1.1rem] px-1 rounded-full bg-zinc-500 text-[10px] leading-[1.1rem] text-white font-semibold text-center">
                   {unreadCount > 9 ? '9+' : unreadCount}
                 </span>
               )}
@@ -48,7 +48,7 @@ function SessionPill({ label, sublabel, active, onClick, plus = false, state = n
         </div>
       </div>
       {sublabel && (
-        <div className="text-xs text-slate-300 break-words whitespace-normal mt-1">
+        <div className="text-xs text-zinc-300 break-words whitespace-normal mt-1">
           {sublabel}
         </div>
       )}
@@ -73,12 +73,12 @@ export default function SessionRadialMenu({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm" onClick={onClose}>
+    <div className="fixed inset-0 z-50 bg-zinc-950/80 backdrop-blur-sm" onClick={onClose}>
       <div className="absolute inset-0 flex items-center justify-center p-4 pointer-events-none">
-        <div className="w-full max-w-xl max-h-[85vh] rounded-3xl border border-slate-700 bg-slate-900/95 shadow-2xl overflow-hidden pointer-events-auto" onClick={(e) => e.stopPropagation()}>
-          <div className="px-5 py-4 border-b border-slate-800">
-            <div className="text-base font-semibold text-slate-100">Tmux Sessions</div>
-            <div className="text-xs text-slate-400 mt-1">
+        <div className="w-full max-w-xl max-h-[85vh] rounded-3xl border border-zinc-700 bg-zinc-900/95 shadow-2xl overflow-hidden pointer-events-auto" onClick={(e) => e.stopPropagation()}>
+          <div className="px-5 py-4 border-b border-zinc-800">
+            <div className="text-base font-semibold text-zinc-100">Tmux Sessions</div>
+            <div className="text-xs text-zinc-400 mt-1">
               Tap a session to attach. Tap outside this panel to close.
             </div>
           </div>
@@ -122,7 +122,7 @@ export default function SessionRadialMenu({
                 ))}
               </div>
             ) : (
-              <div className="text-sm text-slate-400 px-1 py-2">
+              <div className="text-sm text-zinc-400 px-1 py-2">
                 No tmux sessions found.
               </div>
             )}
