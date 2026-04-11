@@ -403,15 +403,27 @@ echo "done:auth-sync"
     }));
 }
 
+async function mapWithConcurrency(items, limit, fn) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  async function worker() {
+    while (nextIndex < items.length) {
+      const i = nextIndex++;
+      results[i] = await fn(items[i]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
 async function listVmSessions() {
   const rawList = await execFileAsync('ssh', ['exe.dev', 'ls']);
   const vmNames = parseVmNamesFromExeList(rawList);
-  const sessions = await Promise.all(vmNames.map(async (name) => {
+  return mapWithConcurrency(vmNames, 4, async (name) => {
     const url = `https://${name}.exe.xyz:${PORT}/`;
     const hasVoiceTerminal = await vmHasVoiceTerminal(`${name}.exe.xyz`);
     return { name, url, hasVoiceTerminal };
-  }));
-  return sessions;
+  });
 }
 
 function buildVmUpdateSessionsPayload(sessions, updateByName) {
@@ -1442,22 +1454,18 @@ function parseVmNamesFromExeList(rawOutput) {
 }
 
 async function vmHasVoiceTerminal(hostname) {
-  const args = [
-    '-o', 'ConnectTimeout=5',
-    '-o', 'BatchMode=yes',
-    '-o', 'StrictHostKeyChecking=accept-new',
-    hostname,
-    'test -d ~/voice-terminal && test -f ~/voice-terminal/package.json && echo yes || echo no'
-  ];
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const output = await execFileAsync('ssh', args);
-      return String(output).split('\n').some((line) => line.trim().toLowerCase() === 'yes');
-    } catch {
-      if (attempt === 2) return false;
-    }
+  try {
+    const output = await execFileAsync('ssh', [
+      '-o', 'ConnectTimeout=5',
+      '-o', 'BatchMode=yes',
+      '-o', 'StrictHostKeyChecking=accept-new',
+      hostname,
+      'test -d ~/voice-terminal && test -f ~/voice-terminal/package.json && echo yes || echo no'
+    ]);
+    return String(output).split('\n').some((line) => line.trim().toLowerCase() === 'yes');
+  } catch {
+    return null;
   }
-  return false;
 }
 
 async function readVmUpdateStatus(hostname) {
@@ -1602,7 +1610,7 @@ app.get('/api/vm-sessions/updates', async (_req, res) => {
   try {
     const sessions = await listVmSessions();
 
-    const installed = sessions.filter((session) => session.hasVoiceTerminal);
+    const installed = sessions.filter((session) => session.hasVoiceTerminal === true);
     const checked = await Promise.all(installed.map(async (session) => ({
       name: session.name,
       update: await readVmUpdateStatus(`${session.name}.exe.xyz`)
@@ -1623,7 +1631,7 @@ app.post('/api/vm-sessions/update-all', async (_req, res) => {
 
   try {
     const sessions = await listVmSessions();
-    const installed = sessions.filter((session) => session.hasVoiceTerminal);
+    const installed = sessions.filter((session) => session.hasVoiceTerminal === true);
     const updated = [];
     const totalSessions = installed.length;
     run.metadata.totalSessions = totalSessions;
@@ -1749,7 +1757,7 @@ app.post('/api/vm-sessions/:vmName/update', async (_req, res) => {
       return;
     }
 
-    if (!session.hasVoiceTerminal) {
+    if (session.hasVoiceTerminal !== true) {
       res.status(409).json({
         error: 'Selected VM does not appear to be running Voice Terminal'
       });

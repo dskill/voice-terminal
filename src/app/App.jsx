@@ -1292,7 +1292,7 @@ export default function App() {
   const isMicInCancelMode = isProcessing || tts.isSpeaking;
   const micStatusText = tts.isSpeaking ? 'Speaking...' : liveText;
   const isUploading = uploadState?.status === 'uploading';
-  const visibleVmSessions = vmSessions.filter((session) => session?.hasVoiceTerminal);
+  const visibleVmSessions = vmSessions.filter((session) => session?.hasVoiceTerminal !== false);
   const isRestrictedVmSessionMode = !vmSessionsLoading && !vmSessionsError && visibleVmSessions.length === 0;
   const vmUpdateProgressTotal = Math.max(0, Number(vmUpdateRunState.totalSessions || 0));
   const vmUpdateProgressCompleted = Math.max(0, Number(vmUpdateRunState.completedSessions || 0));
@@ -1632,6 +1632,7 @@ export default function App() {
                   )}
 
                   {!vmSessionsLoading && !vmSessionsError && visibleVmSessions.map((session) => {
+                    const isUnreachable = session.hasVoiceTerminal === null;
                     const isUpdatingThisVm = vmSingleUpdateLoadingName === session.name;
                     const isUpdatingAuthThisVm = vmSingleAuthLoadingName === session.name;
                     const isSingleRunForVm = vmUpdateRunState.scope === 'single' && vmUpdateRunState.vmName === session.name;
@@ -1648,7 +1649,7 @@ export default function App() {
                     return (
                       <div
                         key={session.name}
-                        className="w-full rounded-lg border border-zinc-700 bg-zinc-900/70 px-3 py-2"
+                        className={`w-full rounded-lg border px-3 py-2 ${isUnreachable ? 'border-zinc-700/50 bg-zinc-900/40' : 'border-zinc-700 bg-zinc-900/70'}`}
                       >
                         <div className="flex items-start gap-2">
                           <button
@@ -1657,12 +1658,15 @@ export default function App() {
                             }}
                             className="flex-1 text-left rounded-md px-2 py-1 -mx-2 -my-1 hover:bg-zinc-800/70 hover:text-white transition-colors"
                           >
-                            <div className="text-sm font-medium text-zinc-100">{session.name}</div>
-                            <div className="text-xs text-zinc-400 mt-0.5">{session.url}</div>
-                            <div className={`text-[11px] mt-1 ${vmUpdateTone(vmUpdatesByName[session.name])}`}>
-                              {formatVmUpdateSummary(vmUpdatesByName[session.name])}
-                            </div>
-                            {vmUpdateAllByName[session.name] && (
+                            <div className={`text-sm font-medium ${isUnreachable ? 'text-zinc-400' : 'text-zinc-100'}`}>{session.name}</div>
+                            <div className="text-xs text-zinc-500 mt-0.5">{session.url}</div>
+                            {isUnreachable
+                              ? <div className="text-[11px] mt-1 text-zinc-500">unreachable</div>
+                              : <div className={`text-[11px] mt-1 ${vmUpdateTone(vmUpdatesByName[session.name])}`}>
+                                  {formatVmUpdateSummary(vmUpdatesByName[session.name])}
+                                </div>
+                            }
+                            {!isUnreachable && vmUpdateAllByName[session.name] && (
                               <div className={`text-[11px] mt-1 ${vmUpdateAllTone(vmUpdateAllByName[session.name])}`}>
                                 {formatVmUpdateAllSummary(vmUpdateAllByName[session.name])}
                               </div>
@@ -1671,14 +1675,16 @@ export default function App() {
                           <button
                             onClick={() => runSingleVmUpdate(session.name)}
                             disabled={
-                              vmUpdateAllLoading
+                              isUnreachable
+                              || vmUpdateAllLoading
                               || vmUpdatesLoading
                               || vmSessionsLoading
                               || !!vmSingleUpdateLoadingName
                               || !!vmSingleAuthLoadingName
                             }
                             className={`shrink-0 px-2.5 py-1.5 rounded-md text-xs font-medium border transition-colors ${
-                              (vmUpdateAllLoading
+                              (isUnreachable
+                                || vmUpdateAllLoading
                                 || vmUpdatesLoading
                                 || vmSessionsLoading
                                 || !!vmSingleUpdateLoadingName
@@ -1692,14 +1698,16 @@ export default function App() {
                           <button
                             onClick={() => runSingleVmAuthUpdate(session.name)}
                             disabled={
-                              vmUpdateAllLoading
+                              isUnreachable
+                              || vmUpdateAllLoading
                               || vmUpdatesLoading
                               || vmSessionsLoading
                               || !!vmSingleUpdateLoadingName
                               || !!vmSingleAuthLoadingName
                             }
                             className={`shrink-0 px-2.5 py-1.5 rounded-md text-xs font-medium border transition-colors ${
-                              (vmUpdateAllLoading
+                              (isUnreachable
+                                || vmUpdateAllLoading
                                 || vmUpdatesLoading
                                 || vmSessionsLoading
                                 || !!vmSingleUpdateLoadingName
