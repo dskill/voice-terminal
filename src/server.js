@@ -1442,21 +1442,22 @@ function parseVmNamesFromExeList(rawOutput) {
 }
 
 async function vmHasVoiceTerminal(hostname) {
-  try {
-    const output = await execFileAsync('ssh', [
-      '-o',
-      'ConnectTimeout=5',
-      '-o',
-      'BatchMode=yes',
-      '-o',
-      'StrictHostKeyChecking=accept-new',
-      hostname,
-      'test -d ~/voice-terminal && test -f ~/voice-terminal/package.json && echo yes || echo no'
-    ]);
-    return String(output).split('\n').some((line) => line.trim().toLowerCase() === 'yes');
-  } catch {
-    return false;
+  const args = [
+    '-o', 'ConnectTimeout=5',
+    '-o', 'BatchMode=yes',
+    '-o', 'StrictHostKeyChecking=accept-new',
+    hostname,
+    'test -d ~/voice-terminal && test -f ~/voice-terminal/package.json && echo yes || echo no'
+  ];
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const output = await execFileAsync('ssh', args);
+      return String(output).split('\n').some((line) => line.trim().toLowerCase() === 'yes');
+    } catch {
+      if (attempt === 2) return false;
+    }
   }
+  return false;
 }
 
 async function readVmUpdateStatus(hostname) {
