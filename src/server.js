@@ -419,7 +419,7 @@ async function mapWithConcurrency(items, limit, fn) {
 async function listVmSessions() {
   const rawList = await execFileAsync('ssh', ['exe.dev', 'ls']);
   const vmNames = parseVmNamesFromExeList(rawList);
-  return mapWithConcurrency(vmNames, 4, async (name) => {
+  return mapWithConcurrency(vmNames, 1, async (name) => {
     const url = `https://${name}.exe.xyz:${PORT}/`;
     const hasVoiceTerminal = await vmHasVoiceTerminal(`${name}.exe.xyz`);
     return { name, url, hasVoiceTerminal };
@@ -1454,18 +1454,24 @@ function parseVmNamesFromExeList(rawOutput) {
 }
 
 async function vmHasVoiceTerminal(hostname) {
-  try {
-    const output = await execFileAsync('ssh', [
-      '-o', 'ConnectTimeout=5',
-      '-o', 'BatchMode=yes',
-      '-o', 'StrictHostKeyChecking=accept-new',
-      hostname,
-      'test -d ~/voice-terminal && test -f ~/voice-terminal/package.json && echo yes || echo no'
-    ]);
-    return String(output).split('\n').some((line) => line.trim().toLowerCase() === 'yes');
-  } catch {
-    return null;
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const output = await execFileAsync('ssh', [
+        '-o', 'ConnectTimeout=5',
+        '-o', 'BatchMode=yes',
+        '-o', 'StrictHostKeyChecking=accept-new',
+        hostname,
+        'test -d ~/voice-terminal && test -f ~/voice-terminal/package.json && echo yes || echo no'
+      ]);
+      return String(output).split('\n').some((line) => line.trim().toLowerCase() === 'yes');
+    } catch {
+      if (attempt < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+      }
+    }
   }
+  return null;
 }
 
 async function readVmUpdateStatus(hostname) {
