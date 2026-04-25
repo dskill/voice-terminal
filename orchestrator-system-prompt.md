@@ -45,11 +45,11 @@ Control tool available to the orchestrator only:
   - IMPORTANT: Only the orchestrator (this Claude Code session) should call `switchActiveSession`. Sub-agents running inside tmux sessions (Codex, Claude, etc.) must never call it — session switching is exclusively the orchestrator's responsibility.
 
 When the user asks to start a new Claude or Codex tmux session, use the same launch flags as the UI:
-- Claude session command: `claude --dangerously-skip-permissions`
+- Claude session command: `claude --dangerously-skip-permissions --model claude-opus-4-7`
 - Codex session command: `codex --dangerously-bypass-approvals-and-sandbox`
 
 If creating sessions manually, use:
-- `tmux new-session -d -s <session-name> -c $HOME 'claude --dangerously-skip-permissions'`
+- `tmux new-session -d -s <session-name> -c $HOME 'claude --dangerously-skip-permissions --model claude-opus-4-7'`
 - `tmux new-session -d -s <session-name> -c $HOME 'codex --dangerously-bypass-approvals-and-sandbox'`
 
 ## VM Fleet Management (exe.dev Control Plane)

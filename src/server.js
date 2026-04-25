@@ -20,7 +20,7 @@ const PORT = process.env.PORT || 3456;
 const ORCHESTRATOR_CONFIG = {
   claude: {
     kind: 'claude',
-    label: 'Claude Opus 4.6',
+    label: 'Claude Opus 4.7',
     defaultModel: 'claude-code'
   },
   'claude-sonnet-4-6': {
@@ -351,37 +351,41 @@ set -euo pipefail
 HOST=${shellQuote(hostname)}
 LOCAL_HOME=${shellQuote(localHome)}
 SSH_OPTS=(-o ConnectTimeout=5 -o BatchMode=yes -o StrictHostKeyChecking=accept-new)
+SCP_FILE_TIMEOUT=10
+SCP_DIR_TIMEOUT=30
+SSH_CMD_TIMEOUT=5
+GH_STATUS_TIMEOUT=5
 
 copy_file_if_exists() {
   local src="$1"
   local dest="$2"
   if [ -f "$src" ]; then
     echo "copy:file $src -> $dest"
-    scp "\${SSH_OPTS[@]}" "$src" "$HOST:$dest"
+    timeout "$SCP_FILE_TIMEOUT" scp "\${SSH_OPTS[@]}" "$src" "$HOST:$dest"
   else
     echo "skip:file-missing $src"
   fi
 }
 
 echo "prepare:remote-dirs"
-ssh "\${SSH_OPTS[@]}" "$HOST" 'mkdir -p ~/.claude ~/.codex ~/.config/gh'
+timeout "$SSH_CMD_TIMEOUT" ssh "\${SSH_OPTS[@]}" "$HOST" 'mkdir -p ~/.claude ~/.codex ~/.config/gh'
 
 copy_file_if_exists "$LOCAL_HOME/.claude.json" "~/.claude.json"
 copy_file_if_exists "$LOCAL_HOME/.claude/.credentials.json" "~/.claude/.credentials.json"
 
 if [ -d "$LOCAL_HOME/.codex" ]; then
   echo "copy:dir $LOCAL_HOME/.codex -> ~/.codex/"
-  scp -r "\${SSH_OPTS[@]}" "$LOCAL_HOME/.codex/." "$HOST:~/.codex/"
+  timeout "$SCP_DIR_TIMEOUT" scp -r "\${SSH_OPTS[@]}" "$LOCAL_HOME/.codex/." "$HOST:~/.codex/"
 else
   echo "skip:dir-missing $LOCAL_HOME/.codex"
 fi
 
 if [ -f "$LOCAL_HOME/.config/gh/hosts.yml" ]; then
   echo "copy:file $LOCAL_HOME/.config/gh/hosts.yml -> ~/.config/gh/hosts.yml"
-  scp "\${SSH_OPTS[@]}" "$LOCAL_HOME/.config/gh/hosts.yml" "$HOST:~/.config/gh/hosts.yml"
-elif command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1 && [ -f "$LOCAL_HOME/.local/share/gh/hosts.yml" ]; then
+  timeout "$SCP_FILE_TIMEOUT" scp "\${SSH_OPTS[@]}" "$LOCAL_HOME/.config/gh/hosts.yml" "$HOST:~/.config/gh/hosts.yml"
+elif command -v gh >/dev/null 2>&1 && timeout "$GH_STATUS_TIMEOUT" gh auth status >/dev/null 2>&1 && [ -f "$LOCAL_HOME/.local/share/gh/hosts.yml" ]; then
   echo "copy:file $LOCAL_HOME/.local/share/gh/hosts.yml -> ~/.config/gh/hosts.yml"
-  scp "\${SSH_OPTS[@]}" "$LOCAL_HOME/.local/share/gh/hosts.yml" "$HOST:~/.config/gh/hosts.yml"
+  timeout "$SCP_FILE_TIMEOUT" scp "\${SSH_OPTS[@]}" "$LOCAL_HOME/.local/share/gh/hosts.yml" "$HOST:~/.config/gh/hosts.yml"
 else
   echo "skip:github-token-not-found"
 fi
@@ -462,7 +466,7 @@ async function createTmuxSession(kind) {
   const sessionName = buildSessionName(safeKind);
   const command = safeKind === 'codex'
     ? 'codex --sandbox danger-full-access --ask-for-approval never'
-    : 'claude --dangerously-skip-permissions';
+    : 'claude --dangerously-skip-permissions --model claude-opus-4-7';
   await execFileAsync('tmux', ['new-session', '-d', '-s', sessionName, '-c', process.env.HOME, command]);
   return { name: sessionName, kind: safeKind, command };
 }

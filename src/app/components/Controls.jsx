@@ -24,7 +24,7 @@ export default function Controls({
   const audioLabel = !audioEnabled ? 'Audio: Off' : (audioUnlocked ? 'Audio: On' : 'Audio: Locked');
   const audioConnected = audioEnabled && audioUnlocked;
   const statusOrchestratorLabel = (
-    orchestratorLabel === 'Claude Sonnet 4.6' || orchestratorLabel === 'Claude Opus 4.6'
+    orchestratorLabel === 'Claude Sonnet 4.6' || orchestratorLabel === 'Claude Opus 4.7'
   ) ? 'LLM' : orchestratorLabel;
 
   return (

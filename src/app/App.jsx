@@ -103,13 +103,13 @@ function createRunId() {
 export default function App() {
   const ORCHESTRATOR_OPTIONS = [
     { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
-    { value: 'claude', label: 'Claude Opus 4.6' },
+    { value: 'claude', label: 'Claude Opus 4.7' },
     { value: 'codex', label: 'Codex (Spark)' },
   ];
   const formatOrchestratorLabel = (kind) => {
     if (kind === 'codex') return 'Codex (Spark)';
     if (kind === 'claude-sonnet-4-6') return 'Claude Sonnet 4.6';
-    return 'Claude Opus 4.6';
+    return 'Claude Opus 4.7';
   };
   const formatStatusOrchestratorLabel = (kind) => {
     if (kind === 'codex') return 'Codex (Spark)';
