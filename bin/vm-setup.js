@@ -58,6 +58,7 @@ async function main() {
   const home = homedir();
   const localClaudeCreds = join(home, '.claude', '.credentials.json');
   const localClaudeSettings = join(home, '.claude', 'settings.json');
+  const localClaudeJson = join(home, '.claude.json');
   const localCodexAuth = join(home, '.codex', 'auth.json');
   const localGhHosts = join(home, '.config', 'gh', 'hosts.yml');
   const localPiperModel = join(home, 'voice-terminal', 'models', 'piper', 'en_US-lessac-medium.onnx');
@@ -81,6 +82,7 @@ async function main() {
       const scpRuns = [
         await runCommand(`2/${totalSteps}`, 'scp', [...sshOptions, localClaudeCreds, `${hostname}:~/.claude/.credentials.json`]),
         await runCommand(`2/${totalSteps}`, 'scp', [...sshOptions, localClaudeSettings, `${hostname}:~/.claude/settings.json`]),
+        await runCommand(`2/${totalSteps}`, 'scp', [...sshOptions, localClaudeJson, `${hostname}:~/.claude.json`]),
         await runCommand(`2/${totalSteps}`, 'scp', [...sshOptions, localCodexAuth, `${hostname}:~/.codex/auth.json`]),
         await runCommand(`2/${totalSteps}`, 'scp', [...sshOptions, localGhHosts, `${hostname}:~/.config/gh/hosts.yml`])
       ];
