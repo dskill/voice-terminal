@@ -94,10 +94,17 @@ npm install
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements-stt.txt
-tmux new-session -d -s voice-terminal -c /path/to/voice-terminal '. .venv/bin/activate && npm run dev'
+npm run build   # npm start serves ./dist and does not build
+tmux new-session -d -s voice-terminal -c /path/to/voice-terminal '. .venv/bin/activate && npm start'
 ```
 
-**Important:** The server spawns Claude Code and a Python STT worker subprocess. If you run `npm run dev` directly from within a Claude Code session, the Claude subprocess will fail because Claude Code sets a `CLAUDECODE` environment variable to prevent nested sessions. Running in tmux gives the server a clean shell environment without that variable.
+Use `npm start`, not `npm run dev`, for anything long-lived. `npm run dev` runs
+`vite build --watch` alongside `node --watch src/server.js`; the watcher has
+been observed to silently stop reloading after a while, leaving a months-old
+process serving traffic while edits on disk appear to be live. Rebuild with
+`npm run build` and restart the session when you change the client.
+
+**Important:** The server spawns Claude Code and a Python STT worker subprocess. If you run the server directly from within a Claude Code session, the Claude subprocess will fail because Claude Code sets a `CLAUDECODE` environment variable to prevent nested sessions. Running in tmux gives the server a clean shell environment without that variable.
 
 To view logs: `tmux attach -t voice-terminal`
 To restart: `tmux kill-session -t voice-terminal` then re-run the command above.
