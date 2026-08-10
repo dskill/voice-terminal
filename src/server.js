@@ -20,8 +20,10 @@ const PORT = process.env.PORT || 3456;
 const ORCHESTRATOR_CONFIG = {
   claude: {
     kind: 'claude',
-    label: 'Claude Opus 4.7',
-    defaultModel: 'claude-code'
+    label: 'Claude Opus 5',
+    // Pin the model explicitly rather than using the 'claude-code' sentinel,
+    // which passes no --model flag and silently follows the CLI's own default.
+    defaultModel: 'claude-opus-5'
   },
   'claude-sonnet-4-6': {
     kind: 'claude-sonnet-4-6',
@@ -65,7 +67,7 @@ const wss = new WebSocketServer({ server });
 // Orchestrator Session State
 // ============================================
 
-let activeOrchestratorKind = normalizeOrchestratorKind(process.env.ORCHESTRATOR || 'claude-sonnet-4-6');
+let activeOrchestratorKind = normalizeOrchestratorKind(process.env.ORCHESTRATOR || 'claude');
 let orchestrator = null;
 let sessionReady = false;
 let sessionInitialized = false;
@@ -493,7 +495,7 @@ async function createTmuxSession(kind) {
   const sessionName = buildSessionName(safeKind);
   const command = safeKind === 'codex'
     ? 'codex --sandbox danger-full-access --ask-for-approval never'
-    : 'claude --dangerously-skip-permissions --model claude-opus-4-7';
+    : 'claude --dangerously-skip-permissions --model claude-opus-5';
   await execFileAsync('tmux', ['new-session', '-d', '-s', sessionName, '-c', process.env.HOME, command], { timeout: 10_000 });
   return { name: sessionName, kind: safeKind, command };
 }
