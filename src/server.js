@@ -889,10 +889,9 @@ function createClaudeAdapter(emit, modelName) {
 
     const processRef = spawn('claude', args, {
       cwd: process.env.HOME,
-      env: {
-        ...process.env,
+      env: subscriptionEnv({
         PATH: `${projectBinDir}:${process.env.PATH || ''}`
-      },
+      }),
       stdio: ['pipe', 'pipe', 'pipe']
     });
     claudeProcess = processRef;
@@ -2639,8 +2638,67 @@ wss.on('connection', (ws) => {
 });
 
 // ============================================
+// Billing guard
+// ============================================
+
+// Claude Code resolves credentials in strict order: ANTHROPIC_API_KEY, then
+// ANTHROPIC_AUTH_TOKEN, then the Claude.ai OAuth credential.  A key in the
+// environment therefore *outranks* the subscription login and silently moves
+// every orchestrator turn and every spawned session onto metered API billing —
+// the app looks and behaves identically, so nothing surfaces the change.
+//
+// This VM is meant to run entirely on the Claude subscription, so treat a key
+// as a misconfiguration and refuse to start rather than bill quietly.
+const API_CREDENTIAL_ENV_VARS = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'];
+
+function findApiCredentialVars(env = process.env) {
+  // Presence, not truthiness: an empty ANTHROPIC_API_KEY still claims its slot
+  // in the precedence chain and authenticates as an empty key, which shadows
+  // the OAuth credential just as effectively as a real one.
+  return API_CREDENTIAL_ENV_VARS.filter((name) => name in env);
+}
+
+// Environment for spawned Claude processes. Normally a no-op clone (the guard
+// below means the server won't boot with these set at all), but it keeps child
+// processes on the subscription even if the guard is bypassed — while still
+// honouring an explicit ALLOW_API_BILLING=1 opt-in.
+function subscriptionEnv(extra = {}) {
+  const env = { ...process.env, ...extra };
+  if (process.env.ALLOW_API_BILLING !== '1') {
+    for (const name of API_CREDENTIAL_ENV_VARS) delete env[name];
+  }
+  return env;
+}
+
+function assertSubscriptionAuth() {
+  const found = findApiCredentialVars();
+  if (found.length === 0) {
+    console.log('[auth] No API-key env vars set — using the Claude.ai subscription credential.');
+    return;
+  }
+
+  const detail = found
+    .map((name) => `${name}${process.env[name] === '' ? ' (set but empty)' : ''}`)
+    .join(', ');
+
+  if (process.env.ALLOW_API_BILLING === '1') {
+    console.warn(`[auth] WARNING: ${detail} is set and ALLOW_API_BILLING=1 — this session bills as metered API usage, not the subscription.`);
+    return;
+  }
+
+  console.error(`[auth] Refusing to start: ${detail} is set in the server environment.`);
+  console.error('[auth] Claude Code prefers that over the Claude.ai OAuth credential, so every');
+  console.error('[auth] orchestrator turn and spawned session would bill as metered API usage.');
+  console.error(`[auth] Unset it (\`unset ${found[0]}\`) and restart, or set ALLOW_API_BILLING=1 to`);
+  console.error('[auth] proceed deliberately. Note: exporting an empty value does not disable it.');
+  process.exit(1);
+}
+
+// ============================================
 // Start Server
 // ============================================
+
+assertSubscriptionAuth();
 
 server.listen(PORT, () => {
   console.log(`Voice terminal server running on port ${PORT}`);
