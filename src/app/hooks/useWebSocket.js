@@ -24,7 +24,13 @@ export default function useWebSocket() {
   }, []);
 
   useEffect(() => {
+    // Cleanup calls ws.close(), which fires onclose *after* the timer is
+    // cleared -- without this flag that handler schedules a fresh reconnect and
+    // leaves an orphaned socket reconnecting forever behind the unmounted hook.
+    let cancelled = false;
+
     function connect() {
+      if (cancelled) return;
       const url = `wss://${location.host}`;
       const ws = new WebSocket(url);
       wsRef.current = ws;
@@ -43,6 +49,7 @@ export default function useWebSocket() {
       ws.onclose = () => {
         setIsConnected(false);
         wsRef.current = null;
+        if (cancelled) return;
         reconnectTimer.current = setTimeout(connect, 3000);
       };
 
@@ -57,7 +64,13 @@ export default function useWebSocket() {
           return;
         }
 
-        const data = JSON.parse(event.data);
+        let data;
+        try {
+          data = JSON.parse(event.data);
+        } catch {
+          console.error('Ignoring malformed WebSocket message');
+          return;
+        }
 
         if (data.type === 'session-status') {
           setSessionRunning(!!data.running);
@@ -99,6 +112,7 @@ export default function useWebSocket() {
     connect();
 
     return () => {
+      cancelled = true;
       clearTimeout(reconnectTimer.current);
       if (wsRef.current) wsRef.current.close();
       for (const [id, pending] of sttPendingRef.current.entries()) {

@@ -220,6 +220,12 @@ export async function synthesizeStream(text, { signal, onStart, onChunk, onEnd }
 
     signal?.addEventListener('abort', abortHandler, { once: true });
 
+    // If Piper dies early (bad model config, bad speaker id) the writes below
+    // hit a closed pipe.  Without this listener that EPIPE surfaces as an
+    // uncaught exception and takes the server down mid-response; the real
+    // failure is reported by the 'close' handler via stderr instead.
+    child.stdin.on('error', () => {});
+
     child.once('spawn', () => {
       onStart?.({
         sampleRate,

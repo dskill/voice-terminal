@@ -15,6 +15,10 @@ const QUIET_MS_DEFAULT = 5000;
 const SUBMIT_KEY = 'Enter';
 const MAX_BUFFER = 10 * 1024 * 1024;
 const TIMEOUT_MS = 15000;
+const STALE_LOCK_MS = 60000;
+// Guard against a pane log growing without bound: read-stream only ever needs
+// the bytes after the cursor, so never pull more than this into memory at once.
+const MAX_STREAM_READ_BYTES = 5 * 1024 * 1024;
 
 function usage() {
   console.error('Usage: tmux-broker <command> [options]');
@@ -168,19 +172,25 @@ async function getFileSize(path) {
   }
 }
 
+async function readRange(path, start, length) {
+  if (length <= 0) return Buffer.alloc(0);
+  const handle = await fs.open(path, 'r');
+  try {
+    const buffer = Buffer.alloc(length);
+    // A single read() can come up short; trust bytesRead rather than the
+    // requested length, otherwise the tail is padded with NUL bytes.
+    const { bytesRead } = await handle.read(buffer, 0, length, start);
+    return buffer.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+}
+
 async function readTail(path, byteCount = 4096) {
   const size = await getFileSize(path);
   if (size === 0) return '';
   const start = Math.max(0, size - byteCount);
-  const handle = await fs.open(path, 'r');
-  try {
-    const length = size - start;
-    const buffer = Buffer.alloc(length);
-    await handle.read(buffer, 0, length, start);
-    return buffer.toString('utf8');
-  } finally {
-    await handle.close();
-  }
+  return (await readRange(path, start, size - start)).toString('utf8');
 }
 
 function hasPromptLikeEnding(text) {
@@ -242,6 +252,15 @@ async function withPaneLock(key, fn, timeoutMs = 10000) {
       }
     } catch (err) {
       if (err?.code !== 'EEXIST') throw err;
+      // A holder that was SIGKILLed leaves its lock file behind forever, which
+      // would wedge this pane for every future caller.  Reclaim clearly-stale ones.
+      try {
+        const { mtimeMs } = await fs.stat(path);
+        if (Date.now() - mtimeMs > STALE_LOCK_MS) {
+          await fs.unlink(path).catch(() => {});
+          continue;
+        }
+      } catch { /* lock vanished between open and stat; just retry */ }
       if (Date.now() - startedAt > timeoutMs) {
         throw new Error(`timed out waiting for lock: ${key}`);
       }
@@ -257,8 +276,15 @@ async function ensurePaneState(sessionName, paneTarget) {
   const logPath = logPathFor(key);
   await fs.appendFile(logPath, '');
 
-  const pipeCmd = `cat >> ${shellEscapeSingleQuoted(logPath)}`;
-  await runTmux(['pipe-pane', '-O', '-t', resolved.target, pipeCmd]);
+  // Only (re)establish the pipe when the pane isn't already piped.  This runs on
+  // every status poll; unconditionally re-running pipe-pane killed and respawned
+  // the `cat` helper each time, which is pure churn and can drop pane output in
+  // the gap between teardown and re-attach.
+  const alreadyPiped = (await runTmux(['display-message', '-p', '-t', resolved.target, '#{pane_pipe}'])).trim();
+  if (alreadyPiped !== '1') {
+    const pipeCmd = `cat >> ${shellEscapeSingleQuoted(logPath)}`;
+    await runTmux(['pipe-pane', '-O', '-t', resolved.target, pipeCmd]);
+  }
 
   const existing = await readState(key);
   if (existing) return { key, state: existing, resolved };
@@ -363,14 +389,17 @@ async function cmdReadStream(opts) {
   const session = requireString(opts.session, 'session');
   const quietMs = Number(opts['quiet-ms'] || QUIET_MS_DEFAULT);
   const { key, state, resolved } = await refreshPaneState(session, opts.pane, Number.isFinite(quietMs) ? quietMs : QUIET_MS_DEFAULT);
-  const raw = await fs.readFile(state.logPath);
+  const size = await getFileSize(state.logPath);
   const explicitCursor = opts.cursor !== undefined ? Number(opts.cursor) : null;
   let start = Number.isInteger(explicitCursor) && explicitCursor >= 0
     ? explicitCursor
     : Number(state.cursor || 0);
-  if (start > raw.length) start = raw.length;
-  const chunk = raw.subarray(start);
-  const nextCursor = raw.length;
+  if (start > size) start = size;
+  // Read only the unread tail rather than the whole file, and cap it so a pane
+  // that has produced megabytes since the last poll can't blow up memory.
+  if (size - start > MAX_STREAM_READ_BYTES) start = size - MAX_STREAM_READ_BYTES;
+  const chunk = await readRange(state.logPath, start, size - start);
+  const nextCursor = size;
   const nextState = { ...state, cursor: nextCursor };
   await writeState(key, nextState);
 
@@ -522,6 +551,15 @@ async function main() {
       usage();
       process.exitCode = 1;
   }
+}
+
+// A consumer that stops reading (a pipe into `head`, a killed parent) otherwise
+// takes this process down with an unhandled 'error' event mid-write.
+for (const stream of [process.stdout, process.stderr]) {
+  stream.on('error', (err) => {
+    if (err?.code === 'EPIPE') process.exit(0);
+    throw err;
+  });
 }
 
 main().catch((err) => {

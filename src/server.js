@@ -84,10 +84,24 @@ let sttWorkerProcess = null;
 let sttReady = false;
 let sttPending = new Map();
 let tmuxStatusInterval = null;
+let tmuxStatusInFlight = false;
 let lastTmuxStatusJson = '';
+const TMUX_STATUS_POLL_MS = Number(process.env.TMUX_STATUS_POLL_MS || 2000);
+const TMUX_STATUS_TIMEOUT_MS = Number(process.env.TMUX_STATUS_TIMEOUT_MS || 20_000);
 let activeTmuxSessionName = '';
 const activeTTSStreams = new Map();
 const activeVmUpdateRuns = new Map();
+
+// History is held in memory for the life of the process and replayed in full to
+// every reconnecting client, so it needs a ceiling on a long-lived server.
+const MAX_HISTORY_MESSAGES = Number(process.env.MAX_HISTORY_MESSAGES || 500);
+
+function pushHistory(message) {
+  conversationHistory.push(message);
+  const overflow = conversationHistory.length - MAX_HISTORY_MESSAGES;
+  if (overflow > 0) conversationHistory.splice(0, overflow);
+  return message;
+}
 
 function cloneToolCalls(toolCalls) {
   if (!Array.isArray(toolCalls)) return [];
@@ -151,10 +165,28 @@ function sendBinaryToClients(clients, buffer) {
   }
 }
 
-function execFileAsync(command, args) {
+// Every exec here must be bounded.  Without a timeout a wedged child is never
+// reaped: its stdio pipes stay open in this process, so the fd table and RSS
+// grow without limit until the server hits EMFILE.  killSignal is SIGKILL
+// because a child stuck in an uninterruptible syscall ignores SIGTERM.
+const EXEC_DEFAULT_TIMEOUT_MS = 60_000;
+const EXEC_DEFAULT_MAX_BUFFER = 10 * 1024 * 1024;
+
+function execFileAsync(command, args, options = {}) {
+  const { timeout = EXEC_DEFAULT_TIMEOUT_MS, maxBuffer = EXEC_DEFAULT_MAX_BUFFER, env } = options;
   return new Promise((resolve, reject) => {
-    execFile(command, args, { encoding: 'utf8' }, (error, stdout, stderr) => {
+    execFile(command, args, {
+      encoding: 'utf8',
+      timeout,
+      maxBuffer,
+      killSignal: 'SIGKILL',
+      ...(env ? { env } : {})
+    }, (error, stdout, stderr) => {
       if (error) {
+        if (error.killed || error.signal === 'SIGKILL') {
+          reject(new Error(`${command} timed out after ${timeout}ms`));
+          return;
+        }
         reject(new Error((stderr || error.message || '').trim()));
         return;
       }
@@ -373,12 +405,7 @@ timeout "$SSH_CMD_TIMEOUT" ssh "\${SSH_OPTS[@]}" "$HOST" 'mkdir -p ~/.claude ~/.
 copy_file_if_exists "$LOCAL_HOME/.claude.json" "~/.claude.json"
 copy_file_if_exists "$LOCAL_HOME/.claude/.credentials.json" "~/.claude/.credentials.json"
 
-if [ -d "$LOCAL_HOME/.codex" ]; then
-  echo "copy:dir $LOCAL_HOME/.codex -> ~/.codex/"
-  timeout "$SCP_DIR_TIMEOUT" scp -r "\${SSH_OPTS[@]}" "$LOCAL_HOME/.codex/." "$HOST:~/.codex/"
-else
-  echo "skip:dir-missing $LOCAL_HOME/.codex"
-fi
+copy_file_if_exists "$LOCAL_HOME/.codex/auth.json" "~/.codex/auth.json"
 
 if [ -f "$LOCAL_HOME/.config/gh/hosts.yml" ]; then
   echo "copy:file $LOCAL_HOME/.config/gh/hosts.yml -> ~/.config/gh/hosts.yml"
@@ -421,7 +448,7 @@ async function mapWithConcurrency(items, limit, fn) {
 }
 
 async function listVmSessions() {
-  const rawList = await execFileAsync('ssh', ['exe.dev', 'ls']);
+  const rawList = await execFileAsync('ssh', ['exe.dev', 'ls'], { timeout: 30_000 });
   const vmNames = parseVmNamesFromExeList(rawList);
   return mapWithConcurrency(vmNames, 1, async (name) => {
     const url = `https://${name}.exe.xyz:${PORT}/`;
@@ -440,7 +467,7 @@ function buildVmUpdateSessionsPayload(sessions, updateByName) {
 const HIDDEN_SESSIONS = new Set(['voice-terminal', 'claude-code-sdk']);
 
 async function listTmuxSessions() {
-  const output = await execFileAsync('tmux', ['list-sessions']);
+  const output = await execFileAsync('tmux', ['list-sessions'], { timeout: 10_000 });
   if (!output) return [];
 
   return output
@@ -467,7 +494,7 @@ async function createTmuxSession(kind) {
   const command = safeKind === 'codex'
     ? 'codex --sandbox danger-full-access --ask-for-approval never'
     : 'claude --dangerously-skip-permissions --model claude-opus-4-7';
-  await execFileAsync('tmux', ['new-session', '-d', '-s', sessionName, '-c', process.env.HOME, command]);
+  await execFileAsync('tmux', ['new-session', '-d', '-s', sessionName, '-c', process.env.HOME, command], { timeout: 10_000 });
   return { name: sessionName, kind: safeKind, command };
 }
 
@@ -777,7 +804,7 @@ function handleOrchestratorEvent(event) {
       metadata,
       timestamp: Date.now()
     };
-    conversationHistory.push(assistantMessage);
+    pushHistory(assistantMessage);
     currentTurnToolCalls = [];
     currentTurnTimeline = [];
     currentTurnSeq = 0;
@@ -835,6 +862,7 @@ function handleOrchestratorEvent(event) {
 
 function createClaudeAdapter(emit, modelName) {
   let claudeProcess = null;
+  let activeReadline = null;
   let ready = false;
 
   function start() {
@@ -868,6 +896,7 @@ function createClaudeAdapter(emit, modelName) {
     claudeProcess = processRef;
 
     const rl = createInterface({ input: processRef.stdout });
+    activeReadline = rl;
     rl.on('line', (line) => {
       if (!line.trim()) return;
       let msg;
@@ -939,6 +968,8 @@ function createClaudeAdapter(emit, modelName) {
     });
 
     processRef.on('close', (code) => {
+      rl.close();
+      if (activeReadline === rl) activeReadline = null;
       if (claudeProcess !== processRef) return;
       claudeProcess = null;
       ready = false;
@@ -967,11 +998,22 @@ function createClaudeAdapter(emit, modelName) {
   }
 
   function stop() {
+    if (activeReadline) {
+      activeReadline.close();
+      activeReadline = null;
+    }
     if (!claudeProcess) {
       ready = false;
       return;
     }
-    claudeProcess.kill('SIGTERM');
+    const dying = claudeProcess;
+    dying.kill('SIGTERM');
+    // Don't leave a wedged CLI holding its pipes open indefinitely.
+    const escalation = setTimeout(() => {
+      if (!dying.killed) dying.kill('SIGKILL');
+    }, 5000);
+    escalation.unref();
+    dying.once('close', () => clearTimeout(escalation));
     claudeProcess = null;
     ready = false;
   }
@@ -1337,7 +1379,7 @@ function dispatchUserMessage(userMessage) {
     return { error: 'Missing message content' };
   }
 
-  conversationHistory.push({
+  pushHistory({
     id: nextMessageId++,
     type: 'user',
     content,
@@ -1378,7 +1420,7 @@ function interruptSession() {
         },
         timestamp: Date.now()
       };
-      conversationHistory.push(assistantMessage);
+      pushHistory(assistantMessage);
       cancelledSnapshot = {
         fullResponse: assistantMessage.content,
         toolCalls: assistantMessage.toolCalls,
@@ -1467,7 +1509,7 @@ async function vmHasVoiceTerminal(hostname) {
         '-o', 'StrictHostKeyChecking=accept-new',
         hostname,
         'test -d ~/voice-terminal && test -f ~/voice-terminal/package.json && echo yes || echo no'
-      ]);
+      ], { timeout: 20_000 });
       return String(output).split('\n').some((line) => line.trim().toLowerCase() === 'yes');
     } catch {
       if (attempt < maxAttempts) {
@@ -1535,7 +1577,7 @@ fi`;
       'StrictHostKeyChecking=accept-new',
       hostname,
       statusCommand
-    ]);
+    ], { timeout: 120_000 }); // does a `git fetch` over ssh
 
     const result = {
       serverRunning: false,
@@ -2326,7 +2368,14 @@ async function readTmuxAgentStatus() {
       '--all',
       '--all-panes',
       '--json'
-    ]);
+    ], {
+      timeout: TMUX_STATUS_TIMEOUT_MS,
+      // libuv 1.48 (Node 18.19) can wedge a process in its io_uring fs path:
+      // the work completes but the loop never drains and the process sits in
+      // epoll_wait forever.  This broker is fs-heavy and runs on a short poll,
+      // so it hit that bug often enough to pile up ~90 stuck processes.
+      env: { ...process.env, UV_USE_IO_URING: '0' }
+    });
     const parsed = JSON.parse(raw || '{}');
     const sessions = Array.isArray(parsed?.sessions) ? parsed.sessions : [];
     return sessions.filter((s) => !HIDDEN_SESSIONS.has(s.session)).map((session) => ({
@@ -2349,12 +2398,21 @@ async function readTmuxAgentStatus() {
 }
 
 async function publishTmuxAgentStatus(force = false) {
-  const sessions = await readTmuxAgentStatus();
-  const payload = { type: 'tmux-agent-status', sessions };
-  const json = JSON.stringify(payload);
-  if (!force && json === lastTmuxStatusJson) return;
-  lastTmuxStatusJson = json;
-  broadcastToClients(payload);
+  // A poll spawns a Node process that makes several tmux round-trips per pane,
+  // which can easily outlast the poll interval.  Without this guard slow runs
+  // overlap and stack up, each one adding more tmux contention.
+  if (tmuxStatusInFlight) return;
+  tmuxStatusInFlight = true;
+  try {
+    const sessions = await readTmuxAgentStatus();
+    const payload = { type: 'tmux-agent-status', sessions };
+    const json = JSON.stringify(payload);
+    if (!force && json === lastTmuxStatusJson) return;
+    lastTmuxStatusJson = json;
+    broadcastToClients(payload);
+  } finally {
+    tmuxStatusInFlight = false;
+  }
 }
 
 function startTmuxStatusPolling() {
@@ -2362,7 +2420,7 @@ function startTmuxStatusPolling() {
   publishTmuxAgentStatus(true).catch(() => {});
   tmuxStatusInterval = setInterval(() => {
     publishTmuxAgentStatus(false).catch(() => {});
-  }, 2000);
+  }, TMUX_STATUS_POLL_MS);
 }
 
 function stopTmuxStatusPolling() {
@@ -2516,13 +2574,6 @@ wss.on('connection', (ws) => {
       } else if (message.type === 'voice-command') {
         const transcript = applyTmuxSessionContext(message.transcript);
 
-        conversationHistory.push({
-          id: nextMessageId++,
-          type: 'user',
-          content: transcript,
-          timestamp: Date.now()
-        });
-
         if (!sessionReady || !orchestrator?.isReady()) {
           ws.send(JSON.stringify({
             type: 'error',
@@ -2531,8 +2582,10 @@ wss.on('connection', (ws) => {
           return;
         }
 
-
-        const result = sendToOrchestrator(transcript);
+        // dispatchUserMessage records the turn and rolls it back if the
+        // orchestrator rejects it.  Pushing here instead left the user's
+        // message stranded in history with no reply whenever the send failed.
+        const result = dispatchUserMessage(transcript);
         if (result.error) {
           ws.send(JSON.stringify({ type: 'error', message: result.error }));
         }
