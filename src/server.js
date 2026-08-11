@@ -25,10 +25,10 @@ const ORCHESTRATOR_CONFIG = {
     // which passes no --model flag and silently follows the CLI's own default.
     defaultModel: 'claude-opus-5'
   },
-  'claude-sonnet-4-6': {
-    kind: 'claude-sonnet-4-6',
-    label: 'Claude Sonnet 4.6',
-    defaultModel: 'claude-sonnet-4-6'
+  'claude-sonnet-5': {
+    kind: 'claude-sonnet-5',
+    label: 'Claude Sonnet 5',
+    defaultModel: 'claude-sonnet-5'
   },
   codex: {
     kind: 'codex',
@@ -39,11 +39,16 @@ const ORCHESTRATOR_CONFIG = {
 
 const SUPPORTED_ORCHESTRATORS = Object.keys(ORCHESTRATOR_CONFIG);
 
+// Retired kinds, mapped to their successor. Clients persist the kind in
+// localStorage, so a stale value must land on the equivalent model rather than
+// silently falling through to the default and switching tiers under the user.
+const LEGACY_ORCHESTRATOR_KINDS = {
+  'claude-sonnet-4-6': 'claude-sonnet-5'
+};
+
 function normalizeOrchestratorKind(kind) {
-  if (kind === 'codex') return 'codex';
-  if (kind === 'claude') return 'claude';
-  if (kind === 'claude-sonnet-4-6') return 'claude-sonnet-4-6';
-  return 'claude';
+  const resolved = LEGACY_ORCHESTRATOR_KINDS[kind] || kind;
+  return Object.hasOwn(ORCHESTRATOR_CONFIG, resolved) ? resolved : 'claude';
 }
 
 function orchestratorLabel(kind) {

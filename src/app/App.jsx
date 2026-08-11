@@ -100,6 +100,17 @@ function createRunId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+// Kind identifiers only — labels come from the server. This list stays local
+// because normalization has to work before the first socket message arrives
+// (e.g. reading a persisted choice out of localStorage on mount).
+const ORCHESTRATOR_KINDS = ['claude', 'claude-sonnet-5', 'codex'];
+const LEGACY_ORCHESTRATOR_KINDS = { 'claude-sonnet-4-6': 'claude-sonnet-5' };
+
+function normalizeOrchestratorKind(kind) {
+  const resolved = LEGACY_ORCHESTRATOR_KINDS[kind] || kind;
+  return ORCHESTRATOR_KINDS.includes(resolved) ? resolved : 'claude';
+}
+
 export default function App() {
   const formatStatusOrchestratorLabel = (kind) => {
     if (kind === 'codex') return 'Codex (Spark)';
@@ -159,7 +170,13 @@ export default function App() {
     const stored = localStorage.getItem('voice-terminal-orchestrator');
     if (stored === 'codex') return 'codex';
     if (stored === 'claude') return 'claude';
-    if (stored === 'claude-sonnet-4-6') return 'claude-sonnet-4-6';
+    if (stored === 'claude-sonnet-5') return 'claude-sonnet-5';
+    // Retired kind: keep the user on Sonnet rather than bumping them to Opus,
+    // and rewrite the stored value so this only happens once.
+    if (stored === 'claude-sonnet-4-6') {
+      localStorage.setItem('voice-terminal-orchestrator', 'claude-sonnet-5');
+      return 'claude-sonnet-5';
+    }
     // No explicit choice stored. This has to match the server's default kind:
     // the effect below pushes this value on connect, so a mismatch here
     // silently overrides whatever the server booted with.
@@ -1150,9 +1167,7 @@ export default function App() {
   }, [ws, selectedOrchestrator]);
 
   const handleSelectOrchestrator = useCallback((next) => {
-    const normalized = next === 'codex'
-      ? 'codex'
-      : (next === 'claude-sonnet-4-6' ? 'claude-sonnet-4-6' : 'claude');
+    const normalized = normalizeOrchestratorKind(next);
     setSelectedOrchestrator(normalized);
     localStorage.setItem('voice-terminal-orchestrator', normalized);
     setMessages([]);
@@ -1268,9 +1283,7 @@ export default function App() {
 
   useEffect(() => {
     if (!ws.isConnected) return;
-    const desired = selectedOrchestrator === 'codex'
-      ? 'codex'
-      : (selectedOrchestrator === 'claude-sonnet-4-6' ? 'claude-sonnet-4-6' : 'claude');
+    const desired = normalizeOrchestratorKind(selectedOrchestrator);
     if (ws.orchestrator && ws.orchestrator !== desired) {
       ws.setSessionOrchestrator(desired);
     }

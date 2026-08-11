@@ -4,7 +4,7 @@ export default function useWebSocket() {
   const [isConnected, setIsConnected] = useState(false);
   const [sessionRunning, setSessionRunning] = useState(false);
   const [orchestrator, setOrchestrator] = useState('claude');
-  const [supportedOrchestrators, setSupportedOrchestrators] = useState(['claude', 'claude-sonnet-4-6', 'codex']);
+  const [supportedOrchestrators, setSupportedOrchestrators] = useState(['claude', 'claude-sonnet-5', 'codex']);
   // Labels are owned by the server (ORCHESTRATOR_CONFIG); empty until it tells us.
   const [orchestratorOptions, setOrchestratorOptions] = useState([]);
   const [serverTTSEnabled, setServerTTSEnabled] = useState(true);
