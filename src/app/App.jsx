@@ -101,16 +101,6 @@ function createRunId() {
 }
 
 export default function App() {
-  const ORCHESTRATOR_OPTIONS = [
-    { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
-    { value: 'claude', label: 'Claude Opus 4.7' },
-    { value: 'codex', label: 'Codex (Spark)' },
-  ];
-  const formatOrchestratorLabel = (kind) => {
-    if (kind === 'codex') return 'Codex (Spark)';
-    if (kind === 'claude-sonnet-4-6') return 'Claude Sonnet 4.6';
-    return 'Claude Opus 4.7';
-  };
   const formatStatusOrchestratorLabel = (kind) => {
     if (kind === 'codex') return 'Codex (Spark)';
     return 'LLM';
@@ -170,7 +160,10 @@ export default function App() {
     if (stored === 'codex') return 'codex';
     if (stored === 'claude') return 'claude';
     if (stored === 'claude-sonnet-4-6') return 'claude-sonnet-4-6';
-    return 'claude-sonnet-4-6';
+    // No explicit choice stored. This has to match the server's default kind:
+    // the effect below pushes this value on connect, so a mismatch here
+    // silently overrides whatever the server booted with.
+    return 'claude';
   });
   const completionSeenRef = useRef({});
   const tmuxStatusBaselineReadyRef = useRef(false);
@@ -179,6 +172,16 @@ export default function App() {
   const fileInputRef = useRef(null);
 
   const ws = useWebSocket();
+
+  // Options and their labels are owned by the server's ORCHESTRATOR_CONFIG, so
+  // the picker can't drift from the model actually being run. The fallback only
+  // covers the gap before the first session-status message arrives.
+  const ORCHESTRATOR_OPTIONS = ws.orchestratorOptions?.length
+    ? ws.orchestratorOptions
+    : [{ value: 'claude', label: 'Claude' }, { value: 'codex', label: 'Codex' }];
+  const formatOrchestratorLabel = (kind) => (
+    ORCHESTRATOR_OPTIONS.find((option) => option.value === kind)?.label || kind
+  );
   const speech = useSpeechRecognition();
   const tts = useTTS();
   const {

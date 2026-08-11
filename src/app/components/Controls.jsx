@@ -23,9 +23,10 @@ export default function Controls({
 }) {
   const audioLabel = !audioEnabled ? 'Audio: Off' : (audioUnlocked ? 'Audio: On' : 'Audio: Locked');
   const audioConnected = audioEnabled && audioUnlocked;
-  const statusOrchestratorLabel = (
-    orchestratorLabel === 'Claude Sonnet 4.6' || orchestratorLabel === 'Claude Opus 4.7'
-  ) ? 'LLM' : orchestratorLabel;
+  // App already collapses the Claude variants to 'LLM' via
+  // formatStatusOrchestratorLabel; this used to re-check the old label strings
+  // literally, which silently stopped matching whenever a model was renamed.
+  const statusOrchestratorLabel = orchestratorLabel;
 
   return (
     <div className="flex items-center justify-center gap-2 flex-wrap px-3 py-2">

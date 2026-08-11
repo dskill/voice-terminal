@@ -50,6 +50,16 @@ function orchestratorLabel(kind) {
   return ORCHESTRATOR_CONFIG[normalizeOrchestratorKind(kind)].label;
 }
 
+// The client used to hardcode its own copy of these labels, so bumping a model
+// here left the UI advertising the old one. Ship value+label together and let
+// the client render whatever the server actually runs.
+function buildOrchestratorOptions() {
+  return SUPPORTED_ORCHESTRATORS.map((kind) => ({
+    value: kind,
+    label: ORCHESTRATOR_CONFIG[kind].label
+  }));
+}
+
 // Serve static files
 const distPath = join(__dirname, '../dist');
 const publicPath = join(__dirname, '../public');
@@ -534,7 +544,8 @@ function broadcastSessionStatus(targetClient = null) {
     running: sessionReady,
     hasProcess: !!orchestrator,
     orchestrator: activeOrchestratorKind,
-    supportedOrchestrators: SUPPORTED_ORCHESTRATORS
+    supportedOrchestrators: SUPPORTED_ORCHESTRATORS,
+    orchestratorOptions: buildOrchestratorOptions()
   };
 
   if (targetClient) {
@@ -1338,7 +1349,9 @@ function switchOrchestrator(kind) {
   broadcastToClients({
     type: 'orchestrator-changed',
     orchestrator: activeOrchestratorKind,
-    label: orchestratorLabel(activeOrchestratorKind)
+    label: orchestratorLabel(activeOrchestratorKind),
+    supportedOrchestrators: SUPPORTED_ORCHESTRATORS,
+    orchestratorOptions: buildOrchestratorOptions()
   });
   broadcastSessionStatus();
 
@@ -2476,7 +2489,8 @@ wss.on('connection', (ws) => {
           type: 'orchestrator-changed',
           orchestrator: activeOrchestratorKind,
           label: orchestratorLabel(activeOrchestratorKind),
-          supportedOrchestrators: SUPPORTED_ORCHESTRATORS
+          supportedOrchestrators: SUPPORTED_ORCHESTRATORS,
+          orchestratorOptions: buildOrchestratorOptions()
         }));
 
       } else if (message.type === 'get-history') {

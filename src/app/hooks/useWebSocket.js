@@ -5,6 +5,8 @@ export default function useWebSocket() {
   const [sessionRunning, setSessionRunning] = useState(false);
   const [orchestrator, setOrchestrator] = useState('claude');
   const [supportedOrchestrators, setSupportedOrchestrators] = useState(['claude', 'claude-sonnet-4-6', 'codex']);
+  // Labels are owned by the server (ORCHESTRATOR_CONFIG); empty until it tells us.
+  const [orchestratorOptions, setOrchestratorOptions] = useState([]);
   const [serverTTSEnabled, setServerTTSEnabled] = useState(true);
   const wsRef = useRef(null);
   const handlersRef = useRef({});
@@ -78,6 +80,9 @@ export default function useWebSocket() {
           if (Array.isArray(data.supportedOrchestrators) && data.supportedOrchestrators.length > 0) {
             setSupportedOrchestrators(data.supportedOrchestrators);
           }
+          if (Array.isArray(data.orchestratorOptions) && data.orchestratorOptions.length > 0) {
+            setOrchestratorOptions(data.orchestratorOptions);
+          }
         } else if (data.type === 'tts-enabled-state') {
           setServerTTSEnabled(data.enabled !== false);
         } else if (data.type === 'session-init') {
@@ -90,6 +95,9 @@ export default function useWebSocket() {
           if (data.orchestrator) setOrchestrator(data.orchestrator);
           if (Array.isArray(data.supportedOrchestrators) && data.supportedOrchestrators.length > 0) {
             setSupportedOrchestrators(data.supportedOrchestrators);
+          }
+          if (Array.isArray(data.orchestratorOptions) && data.orchestratorOptions.length > 0) {
+            setOrchestratorOptions(data.orchestratorOptions);
           }
         }
 
@@ -187,6 +195,7 @@ export default function useWebSocket() {
     sessionRunning,
     orchestrator,
     supportedOrchestrators,
+    orchestratorOptions,
     serverTTSEnabled,
     send,
     setHandler,
