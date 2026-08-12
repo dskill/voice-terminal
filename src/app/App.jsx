@@ -9,6 +9,7 @@ import MicButton from './components/MicButton';
 import InputArea from './components/InputArea';
 import SessionRadialMenu from './components/SessionRadialMenu';
 import SettingsPanel from './components/SettingsPanel';
+import { resumeSharedAudio } from './audio/sharedContext';
 
 function formatFileSize(bytes) {
   const size = Number(bytes || 0);
@@ -211,7 +212,10 @@ export default function App() {
     playToolDispatch,
     playStreamChunk,
   } = useDebugAudioCues();
-  const ttsChunkMetaRef = useRef(null);
+  // FIFO, not a single slot: one header arrives per binary frame, and a single
+  // slot silently discarded a frame whenever two headers landed back to back.
+  const ttsChunkMetaRef = useRef([]);
+  const lastTtsChunkMetaRef = useRef(null);
   const prevIsSpeakingRef = useRef(false);
   const wakeLockRef = useRef(null);
   const recordingControlsRef = useRef(null);
@@ -429,22 +433,29 @@ export default function App() {
     });
 
     ws.setHandler('tts-start', (data) => {
+      // Drop any headers stranded by a previous stream.
+      ttsChunkMetaRef.current = [];
+      lastTtsChunkMetaRef.current = null;
       tts.startStream(data);
       setLiveText('Speaking...');
     });
 
     ws.setHandler('tts-chunk', (data) => {
-      ttsChunkMetaRef.current = {
+      ttsChunkMetaRef.current.push({
         requestId: data.requestId,
         sampleRate: data.sampleRate,
-      };
+      });
+      // Bound the queue in case frames are ever lost and headers accumulate.
+      if (ttsChunkMetaRef.current.length > 256) ttsChunkMetaRef.current.shift();
     });
 
     ws.setHandler('tts-audio-data', (arrayBuffer) => {
-      const meta = ttsChunkMetaRef.current;
+      // Fall back to the previous header rather than dropping the frame: the
+      // sample rate and requestId are stable for the life of a stream.
+      const meta = ttsChunkMetaRef.current.shift() || lastTtsChunkMetaRef.current;
       if (!meta) return;
+      lastTtsChunkMetaRef.current = meta;
       tts.enqueueChunk(arrayBuffer, meta);
-      ttsChunkMetaRef.current = null;
       setLiveText('Speaking...');
       setIsProcessing(false);
     });
@@ -457,7 +468,8 @@ export default function App() {
 
     ws.setHandler('tts-cancelled', (data) => {
       tts.stop();
-      ttsChunkMetaRef.current = null;
+      ttsChunkMetaRef.current = [];
+      lastTtsChunkMetaRef.current = null;
       setLiveText('');
       setIsProcessing(false);
     });
@@ -465,7 +477,8 @@ export default function App() {
     ws.setHandler('tts-error', (data) => {
       console.warn('[TTS] Server error:', data.message);
       tts.stop();
-      ttsChunkMetaRef.current = null;
+      ttsChunkMetaRef.current = [];
+      lastTtsChunkMetaRef.current = null;
       setLiveText('');
       setIsProcessing(false);
     });
@@ -479,7 +492,8 @@ export default function App() {
 
     ws.setHandler('request-cancelled', (data) => {
       tts.stop();
-      ttsChunkMetaRef.current = null;
+      ttsChunkMetaRef.current = [];
+      lastTtsChunkMetaRef.current = null;
       setStreamingMessage((prev) => {
         const timeline = (Array.isArray(data?.timeline) && data.timeline.length > 0)
           ? data.timeline
@@ -612,9 +626,16 @@ export default function App() {
     const onVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         requestWakeLock();
+        // iOS suspends the AudioContext on backgrounding, screen lock, calls,
+        // and route changes. Nothing used to resume it, so audio stayed dead
+        // until the user happened to tap "enable audio" again.
+        resumeSharedAudio('visibilitychange').catch(() => {});
       }
     };
-    const onFocus = () => requestWakeLock();
+    const onFocus = () => {
+      requestWakeLock();
+      resumeSharedAudio('focus').catch(() => {});
+    };
 
     document.addEventListener('visibilitychange', onVisibilityChange);
     window.addEventListener('focus', onFocus);

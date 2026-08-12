@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
+import { getSharedAudioContext } from '../audio/sharedContext';
 
 export default function useSpeechRecognition() {
   const [isListening, setIsListening] = useState(false);
@@ -25,9 +26,7 @@ export default function useSpeechRecognition() {
       if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current);
       if (sourceNodeRef.current) sourceNodeRef.current.disconnect();
       if (analyserRef.current) analyserRef.current.disconnect();
-      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-        audioContextRef.current.close().catch(() => {});
-      }
+      // Never close the context here — it is shared with TTS playback.
     };
   }, []);
 
@@ -44,18 +43,28 @@ export default function useSpeechRecognition() {
       analyserRef.current.disconnect();
       analyserRef.current = null;
     }
-    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-      audioContextRef.current.close().catch(() => {});
-      audioContextRef.current = null;
-    }
+    // The context is shared with playback, so only drop our reference to it —
+    // closing it here used to tear down TTS output too, and the per-recording
+    // create/close churn counted against Safari's concurrent-context cap.
+    audioContextRef.current = null;
     dataArrayRef.current = null;
     setAudioLevel(0);
+  }, []);
+
+  // Stopping every track is what releases the microphone. While any capture
+  // track stays live, iOS holds the audio session in playAndRecord mode, which
+  // routes playback to the earpiece instead of the main speaker.
+  const releaseStream = useCallback(() => {
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((t) => t.stop());
+      mediaStreamRef.current = null;
+    }
   }, []);
 
   const startAudioMeter = useCallback(async (stream) => {
     stopAudioMeter();
 
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = getSharedAudioContext();
     const source = ctx.createMediaStreamSource(stream);
     const analyser = ctx.createAnalyser();
     analyser.fftSize = 256;
@@ -123,16 +132,18 @@ export default function useSpeechRecognition() {
       recorder.onerror = (event) => {
         const msg = event?.error?.message || 'audio-capture-error';
         setError(msg);
+        // A failed recorder never fires onstop, so release the mic here or the
+        // capture track stays live for the rest of the page's life.
+        releaseStream();
+        stopAudioMeter();
+        setIsListening(false);
       };
 
       recorder.onstop = () => {
         const blob = new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' });
         chunksRef.current = [];
 
-        if (mediaStreamRef.current) {
-          mediaStreamRef.current.getTracks().forEach((t) => t.stop());
-          mediaStreamRef.current = null;
-        }
+        releaseStream();
         stopAudioMeter();
 
         if (stopResolveRef.current) {
@@ -143,22 +154,31 @@ export default function useSpeechRecognition() {
       };
 
       mediaRecorderRef.current = recorder;
-      recorder.start();
+      // Emit every 250ms. Without a timeslice the recorder holds the entire
+      // recording in one blob until stop(), so backgrounding the app mid-record
+      // on iOS loses the whole utterance instead of the last fragment.
+      recorder.start(250);
       setIsListening(true);
       return true;
     } catch (err) {
+      // getUserMedia may have succeeded before this threw (e.g. an unsupported
+      // MediaRecorder mime type), which would strand a live capture track.
+      releaseStream();
       stopAudioMeter();
       setError(err?.message || 'microphone-access-denied');
       setIsListening(false);
       return false;
     }
-  }, [isListening, startAudioMeter, stopAudioMeter]);
+  }, [isListening, startAudioMeter, stopAudioMeter, releaseStream]);
 
   const stopListening = useCallback(async () => {
     const recorder = mediaRecorderRef.current;
     if (!recorder) return null;
 
     if (recorder.state === 'inactive') {
+      // onstop never ran for this recorder, so nothing has released the mic.
+      releaseStream();
+      stopAudioMeter();
       return new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' });
     }
 
@@ -167,7 +187,7 @@ export default function useSpeechRecognition() {
       recorder.stop();
       setIsListening(false);
     });
-  }, []);
+  }, [releaseStream, stopAudioMeter]);
 
   const isSupported = typeof window !== 'undefined' &&
     typeof navigator !== 'undefined' &&

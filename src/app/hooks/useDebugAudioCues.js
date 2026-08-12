@@ -1,12 +1,10 @@
 import { useCallback, useRef } from 'react';
+import { getSharedAudioContext, getOutputNode, resumeSharedAudio } from '../audio/sharedContext';
 
-let cueContext = null;
-
+// Shares the app's single AudioContext; a second one here counted against
+// Safari's concurrent-context cap for no benefit.
 function getCueContext() {
-  if (!cueContext) {
-    cueContext = new (window.AudioContext || window.webkitAudioContext)();
-  }
-  return cueContext;
+  return getSharedAudioContext();
 }
 
 function playTone({
@@ -51,7 +49,7 @@ function playTone({
       gain.connect(master);
     }
 
-    master.connect(ctx.destination);
+    master.connect(getOutputNode());
     osc.start(now);
     osc.stop(now + duration);
 
@@ -74,8 +72,7 @@ export default function useDebugAudioCues() {
 
   const unlock = useCallback(async () => {
     try {
-      const ctx = getCueContext();
-      if (ctx.state === 'suspended') await ctx.resume();
+      await resumeSharedAudio('debug-cues');
     } catch {
       // ignore
     }
