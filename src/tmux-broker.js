@@ -565,12 +565,17 @@ function summarizeSession(items) {
   let state = 'idle';
   let completionCount = 0;
   let lastDoneAt = 0;
+  let dialog = null;
   for (const item of items) {
+    // Precedence: something actively running outranks something waiting on a
+    // question, which outranks an ordinary idle prompt.
     if (item.state === 'working') state = 'working';
+    else if (item.state === 'blocked' && state !== 'working') state = 'blocked';
+    if (item.dialog && !dialog) dialog = item.dialog;
     completionCount += Number(item.completionCount || 0);
     lastDoneAt = Math.max(lastDoneAt, Number(item.lastDoneAt || 0));
   }
-  return { state, completionCount, lastDoneAt };
+  return { state, completionCount, lastDoneAt, dialog };
 }
 
 async function statusForSession(session, opts) {
@@ -582,7 +587,7 @@ async function statusForSession(session, opts) {
   const panes = [];
   for (const paneId of resolvedPaneIds) {
     const refreshed = await refreshPaneState(session, paneId, Number.isFinite(quietMs) ? quietMs : QUIET_MS_DEFAULT);
-    panes.push({
+    const pane = {
       session: refreshed.state.session,
       paneId: refreshed.state.paneId,
       state: refreshed.state.state,
@@ -590,7 +595,19 @@ async function statusForSession(session, opts) {
       lastDoneAt: refreshed.state.lastDoneAt || 0,
       lastActivityAt: refreshed.state.lastActivityAt || 0,
       cursor: refreshed.state.cursor || 0
-    });
+    };
+
+    // Only idle panes: a pane still producing output cannot be parked on a
+    // modal, so this keeps the extra capture off the busy path entirely.
+    if (pane.state === 'idle') {
+      const dialog = await readPaneDialog(refreshed.state.target || pane.paneId);
+      if (dialog) {
+        pane.state = 'blocked';
+        pane.dialog = dialog;
+      }
+    }
+
+    panes.push(pane);
   }
   const summary = summarizeSession(panes);
   return {
@@ -598,6 +615,7 @@ async function statusForSession(session, opts) {
     state: summary.state,
     completionCount: summary.completionCount,
     lastDoneAt: summary.lastDoneAt,
+    ...(summary.dialog ? { dialog: summary.dialog } : {}),
     panes
   };
 }
@@ -622,7 +640,10 @@ async function cmdStatus(opts) {
           session: status.session,
           state: status.state,
           completionCount: status.completionCount,
-          lastDoneAt: status.lastDoneAt
+          lastDoneAt: status.lastDoneAt,
+          // Carried into the compact shape too: a caller checking whether a
+          // session needs attention should not have to ask for --all-panes.
+          ...(status.dialog ? { dialog: status.dialog } : {})
         });
       }
     } catch (err) {
