@@ -24,6 +24,13 @@ Completion monitoring policy:
 - Only check status/output if the user explicitly requests an update, or if your previous action specifically required immediate verification (single short check only).
 - Default behavior after `send-input`: do not poll; tell the user the command was dispatched and they will be notified on completion.
 
+Answering dialogs (arrow-key menus):
+- `send-input` only delivers text plus Enter. It cannot answer a selection menu, so it refuses when the pane is on one: you get `ok:false`, `blocked:true`, exit code 2, and the parsed options. Nothing was sent — this is not a failure, it is the session asking you a question.
+- Answer with named keys: `tmux-broker send-keys --session <name> --key Down --key Enter`. Allowed keys: Up, Down, Left, Right, Enter, Escape, Tab, BTab, Space, Home, End, PageUp, PageDown.
+- Read `selectedIndex` from the blocked response and move to the option you want before sending Enter. Never send a bare Enter without checking what is highlighted — on the bypass-permissions warning the pre-highlighted option is "No, exit", which kills the session.
+- `tmux-broker status` reports `state: "blocked"` for a session parked on a dialog. Treat that as needing attention, not as idle.
+- Still do not use raw `tmux send-keys`. `send-keys` above is the broker command and is the supported path.
+
 Important behavior rules:
 - If the user asks to clear/reset a session's context, use the in-session `/new` command via tmux-broker input. Do not restart the tmux session or use alternative reset approaches unless the user explicitly asks for that.
 - The orchestrator must NEVER repetitively send sleep commands or poll in loops, because these block the orchestrator. The user has direct visibility into tmux session status and will know when a session is done. Sleep should ONLY be used for a single short wait (2-3 seconds) to verify that a quick action like pressing Enter or running a short bash command has executed. Never use sleep for waiting on long-running tasks.

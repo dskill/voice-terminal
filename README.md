@@ -114,6 +114,29 @@ Edit `orchestrator-system-prompt.md` to change Claude's behavior or add context 
 
 The server adds `tmux-broker` to `PATH` when spawning the Claude subprocess so it's available without any additional setup.
 
+### Answering dialogs
+
+`send-input` delivers text via paste-buffer, which a TUI menu cannot receive as
+keypresses: with `-p` the payload is wrapped in bracketed-paste markers and Ink
+treats everything inside them as literal text. Sending a raw escape sequence
+moves nothing.
+
+- **`send-keys --key <Name>`** sends real keypresses. Repeatable and whitelisted
+  (`Up Down Left Right Enter Escape Tab BTab Space Home End PageUp PageDown`),
+  because tmux types an unrecognised key name into the pane as literal text.
+  `--repeat <n>` replays the whole sequence.
+- **`status`** reports a third state, `blocked`, for an idle pane parked on a
+  dialog, along with the parsed options and which one is selected. Previously
+  these were indistinguishable from a session waiting at its prompt.
+- **`send-input`** refuses to send into a blocked pane, exiting 2 with
+  `ok:false, blocked:true` rather than pasting text the dialog discards and then
+  pressing Enter on whatever is highlighted. `--force` restores the old
+  behaviour.
+
+Detection reads the rendered screen, not the pane log, and fails open — an
+unfamiliar layout behaves exactly as it did before. Fresh VMs should not hit
+first-run dialogs at all; see [VM_SETUP.md](VM_SETUP.md#pre-accepting-claude-codes-first-run-dialogs).
+
 ## Requirements
 
 - Node.js 18+

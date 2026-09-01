@@ -65,7 +65,7 @@ async function main() {
   const localPiperConfig = `${localPiperModel}.json`;
 
   const summary = [];
-  const totalSteps = 11;
+  const totalSteps = 12;
   let shouldRestartService = false;
 
   const steps = [
@@ -92,8 +92,100 @@ async function main() {
       return ok;
     },
     async () => {
-      const cmd = "if [ -d ~/voice-terminal/.git ]; then cd ~/voice-terminal && git fetch -q origin main && LOCAL=$(git rev-parse HEAD 2>/dev/null || echo \"\") && REMOTE=$(git rev-parse origin/main 2>/dev/null || echo \"\") && if [ -n \"$LOCAL\" ] && [ \"$LOCAL\" = \"$REMOTE\" ]; then echo \"SKIP:repo-up-to-date\"; else git reset --hard origin/main && git clean -fd && echo \"CHANGED:repo-updated\"; fi; else git clone https://github.com/dskill/voice-terminal.git ~/voice-terminal && echo \"CHANGED:repo-cloned\"; fi";
+      // Runs after the credential copy, which overwrites both of these files.
+      //
+      // Claude Code gates two first-run dialogs on config, and both are
+      // arrow-key selects that a tmux-broker send cannot answer.  The
+      // bypass-permissions warning is the dangerous one: it pre-highlights
+      // "No, exit", so an ordinary briefing send confirms it and kills the
+      // session.  The trust dialog fires for any directory not already
+      // recorded as trusted -- including $HOME, which is where sessions are
+      // launched.
+      //
+      // Setting these explicitly rather than relying on the copy above: the
+      // source VM's own config is unversioned, so a fresh VM would otherwise
+      // inherit whatever state that machine happened to be in.
+      const cmd = `python3 - <<'PY'
+import json, os, stat, tempfile
+
+home = os.path.expanduser("~")
+
+def load(path):
+    # Missing is fine -- we create it. Present-but-unparseable is not: treating
+    # that as {} would rewrite the file from scratch and throw away the OAuth
+    # account and project history .claude.json carries.
+    if not os.path.exists(path):
+        return {}
+    with open(path) as handle:
+        content = handle.read().strip()
+    if not content:
+        return {}
+    data = json.loads(content)
+    if not isinstance(data, dict):
+        raise SystemExit("refusing to edit %s: top level is not an object" % path)
+    return data
+
+def atomic_write(path, data, fallback_mode):
+    mode = fallback_mode
+    try:
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+    except OSError:
+        pass
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=directory)
+    try:
+        with os.fdopen(fd, "w") as handle:
+            json.dump(data, handle, indent=2)
+            handle.write("\\n")
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+settings_path = os.path.join(home, ".claude", "settings.json")
+settings = load(settings_path)
+if settings.get("skipDangerousModePermissionPrompt") is not True:
+    settings["skipDangerousModePermissionPrompt"] = True
+    atomic_write(settings_path, settings, 0o644)
+    print("CHANGED:bypass-dialog-accepted")
+else:
+    print("SKIP:bypass-dialog-already-accepted")
+
+config_path = os.path.join(home, ".claude.json")
+config = load(config_path)
+projects = config.setdefault("projects", {})
+if not isinstance(projects, dict):
+    projects = {}
+    config["projects"] = projects
+
+trusted = []
+for directory in (home, os.path.join(home, "voice-terminal")):
+    entry = projects.setdefault(directory, {})
+    if not isinstance(entry, dict):
+        entry = {}
+        projects[directory] = entry
+    if entry.get("hasTrustDialogAccepted") is not True:
+        entry["hasTrustDialogAccepted"] = True
+        trusted.append(directory)
+
+if trusted:
+    atomic_write(config_path, config, 0o600)
+    print("CHANGED:trusted " + " ".join(trusted))
+else:
+    print("SKIP:already-trusted")
+PY`;
       const result = await runCommand(`3/${totalSteps}`, 'ssh', [...sshOptions, hostname, cmd]);
+      summary.push({ step: 'Pre-accept Claude Code first-run dialogs', ok: result.ok, detail: combinedOutput(result) || result.error });
+      return result.ok;
+    },
+    async () => {
+      const cmd = "if [ -d ~/voice-terminal/.git ]; then cd ~/voice-terminal && git fetch -q origin main && LOCAL=$(git rev-parse HEAD 2>/dev/null || echo \"\") && REMOTE=$(git rev-parse origin/main 2>/dev/null || echo \"\") && if [ -n \"$LOCAL\" ] && [ \"$LOCAL\" = \"$REMOTE\" ]; then echo \"SKIP:repo-up-to-date\"; else git reset --hard origin/main && git clean -fd && echo \"CHANGED:repo-updated\"; fi; else git clone https://github.com/dskill/voice-terminal.git ~/voice-terminal && echo \"CHANGED:repo-cloned\"; fi";
+      const result = await runCommand(`4/${totalSteps}`, 'ssh', [...sshOptions, hostname, cmd]);
       if ((combinedOutput(result) || '').includes('CHANGED:')) {
         shouldRestartService = true;
       }
@@ -102,7 +194,7 @@ async function main() {
     },
     async () => {
       const cmd = 'which node && node --version || (sudo apt-get update -qq && sudo apt-get install -y nodejs npm)';
-      const result = await runCommand(`4/${totalSteps}`, 'ssh', [...sshOptions, hostname, cmd]);
+      const result = await runCommand(`5/${totalSteps}`, 'ssh', [...sshOptions, hostname, cmd]);
       summary.push({ step: 'Ensure Node.js and npm', ok: result.ok, detail: combinedOutput(result) || result.error });
       return result.ok;
     },
@@ -115,7 +207,7 @@ if [ -d node_modules ] && [ -f "$STAMP" ] && [ "$(cat "$STAMP" 2>/dev/null)" = "
 else
   npm install --prefer-offline --no-audit --no-fund && printf "%s" "$LOCK_HASH" > "$STAMP" && echo "CHANGED:npm-deps-installed"
 fi`;
-      const result = await runCommand(`5/${totalSteps}`, 'ssh', [...sshOptions, hostname, cmd]);
+      const result = await runCommand(`6/${totalSteps}`, 'ssh', [...sshOptions, hostname, cmd]);
       if ((combinedOutput(result) || '').includes('CHANGED:')) {
         shouldRestartService = true;
       }
@@ -140,7 +232,7 @@ if [ -n "$MISSING" ]; then
 else
   echo "SKIP:python-deps-current"
 fi`;
-      const result = await runCommand(`6/${totalSteps}`, 'ssh', [...sshOptions, hostname, cmd]);
+      const result = await runCommand(`7/${totalSteps}`, 'ssh', [...sshOptions, hostname, cmd]);
       if ((combinedOutput(result) || '').includes('CHANGED:')) {
         shouldRestartService = true;
       }
@@ -148,20 +240,20 @@ fi`;
       return result.ok;
     },
     async () => {
-      const result = await runCommand(`7/${totalSteps}`, 'ssh', [...sshOptions, hostname, 'claude update || true']);
+      const result = await runCommand(`8/${totalSteps}`, 'ssh', [...sshOptions, hostname, 'claude update || true']);
       summary.push({ step: 'Update Claude Code', ok: result.ok, detail: combinedOutput(result) || result.error });
       return result.ok;
     },
     async () => {
       // Remove any native binary install of codex, then install latest via npm.
       const cmd = 'if command -v codex >/dev/null 2>&1; then echo "SKIP:codex-present $(codex --version 2>/dev/null | head -n 1)"; else sudo rm -f /usr/local/bin/codex && sudo npm install -g @openai/codex && echo "CHANGED:codex-installed"; fi';
-      const result = await runCommand(`8/${totalSteps}`, 'ssh', [...sshOptions, hostname, cmd]);
+      const result = await runCommand(`9/${totalSteps}`, 'ssh', [...sshOptions, hostname, cmd]);
       summary.push({ step: 'Install/update Codex via npm', ok: result.ok, detail: combinedOutput(result) || result.error });
       return result.ok;
     },
     async () => {
       const checkResult = await runCommand(
-        `9/${totalSteps}`,
+        `10/${totalSteps}`,
         'ssh',
         [
           ...sshOptions,
@@ -180,12 +272,12 @@ fi`;
 
       let result;
       if (existsSync(localPiperModel) && existsSync(localPiperConfig)) {
-        const mkdirResult = await runCommand(`9/${totalSteps}`, 'ssh', [...sshOptions, hostname, 'mkdir -p ~/voice-terminal/models/piper']);
+        const mkdirResult = await runCommand(`10/${totalSteps}`, 'ssh', [...sshOptions, hostname, 'mkdir -p ~/voice-terminal/models/piper']);
         const modelResult = mkdirResult.ok
-          ? await runCommand(`9/${totalSteps}`, 'scp', [...sshOptions, localPiperModel, `${hostname}:~/voice-terminal/models/piper/en_US-lessac-medium.onnx`])
+          ? await runCommand(`10/${totalSteps}`, 'scp', [...sshOptions, localPiperModel, `${hostname}:~/voice-terminal/models/piper/en_US-lessac-medium.onnx`])
           : { ok: false, stdout: '', stderr: '', error: 'remote mkdir failed' };
         const configResult = modelResult.ok
-          ? await runCommand(`9/${totalSteps}`, 'scp', [...sshOptions, localPiperConfig, `${hostname}:~/voice-terminal/models/piper/en_US-lessac-medium.onnx.json`])
+          ? await runCommand(`10/${totalSteps}`, 'scp', [...sshOptions, localPiperConfig, `${hostname}:~/voice-terminal/models/piper/en_US-lessac-medium.onnx.json`])
           : { ok: false, stdout: '', stderr: '', error: 'model copy failed' };
         const ok = mkdirResult.ok && modelResult.ok && configResult.ok;
         if (ok) shouldRestartService = true;
@@ -195,7 +287,7 @@ fi`;
       }
 
       result = await runCommand(
-        `9/${totalSteps}`,
+        `10/${totalSteps}`,
         'ssh',
         [
           ...sshOptions,
@@ -216,7 +308,7 @@ if [ -n "$HEAD" ] && [ -f "$STAMP" ] && [ "$(cat "$STAMP" 2>/dev/null)" = "$HEAD
 else
   npm run build && mkdir -p dist && printf "%s" "$HEAD" > "$STAMP" && echo "CHANGED:build-ran"
 fi`;
-      const result = await runCommand(`10/${totalSteps}`, 'ssh', [...sshOptions, hostname, cmd]);
+      const result = await runCommand(`11/${totalSteps}`, 'ssh', [...sshOptions, hostname, cmd]);
       if ((combinedOutput(result) || '').includes('CHANGED:')) {
         shouldRestartService = true;
       }
@@ -227,7 +319,7 @@ fi`;
       const cmd = shouldRestartService
         ? "cd ~/voice-terminal && tmux kill-session -t voice-terminal 2>/dev/null; tmux new-session -d -s voice-terminal -c ~/voice-terminal 'PIPER_MODEL=$HOME/voice-terminal/models/piper/en_US-lessac-medium.onnx PIPER_MODEL_CONFIG=$HOME/voice-terminal/models/piper/en_US-lessac-medium.onnx.json . .venv/bin/activate && npm start' && echo 'CHANGED:service-restarted'"
         : "if tmux has-session -t voice-terminal 2>/dev/null; then echo 'SKIP:service-already-running'; else cd ~/voice-terminal && tmux new-session -d -s voice-terminal -c ~/voice-terminal 'PIPER_MODEL=$HOME/voice-terminal/models/piper/en_US-lessac-medium.onnx PIPER_MODEL_CONFIG=$HOME/voice-terminal/models/piper/en_US-lessac-medium.onnx.json . .venv/bin/activate && npm start' && echo 'CHANGED:service-started'; fi";
-      const result = await runCommand(`11/${totalSteps}`, 'ssh', [...sshOptions, hostname, cmd]);
+      const result = await runCommand(`12/${totalSteps}`, 'ssh', [...sshOptions, hostname, cmd]);
       summary.push({ step: 'Start voice-terminal tmux session', ok: result.ok, detail: combinedOutput(result) || result.error });
       return result.ok;
     }
