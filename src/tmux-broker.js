@@ -24,7 +24,7 @@ function usage() {
   console.error('Usage: tmux-broker <command> [options]');
   console.error('');
   console.error('Commands:');
-  console.error('  send-input    --session <name> [--pane <target>] --text <text> [--no-enter] [--json]');
+  console.error('  send-input    --session <name> [--pane <target>] --text <text> [--no-enter] [--force] [--json]');
   console.error('  read-stream   --session <name> [--pane <target>] [--cursor <n>] [--json]');
   console.error('  read-snapshot --session <name> [--pane <target>] [--lines <n>] [--json]');
   console.error('  status        (--session <name> | --all) [--pane <target>] [--all-panes] [--quiet-ms <ms>] [--json]');
@@ -40,7 +40,7 @@ function parseArgv(argv) {
       continue;
     }
     const key = token.slice(2);
-    if (key === 'no-enter' || key === 'json' || key === 'all' || key === 'all-panes') {
+    if (key === 'no-enter' || key === 'json' || key === 'all' || key === 'all-panes' || key === 'force') {
       opts[key] = true;
       continue;
     }
@@ -200,6 +200,92 @@ function hasPromptLikeEnding(text) {
   return /(?:\$|#|>|❯|:)\s*$/.test(last);
 }
 
+// ---------------------------------------------------------------------------
+// Blocking-dialog detection
+//
+// A TUI sitting on a modal select renders once and then goes quiet, so the pane
+// log shows no delta and the pane reads as 'idle' -- indistinguishable from a
+// session waiting at its prompt.  The difference only exists on the rendered
+// screen, so these helpers look there instead of at the log.
+//
+// Everything here fails open: any doubt, any tmux error, any unfamiliar layout
+// returns null and callers behave exactly as they did before this existed.  A
+// false positive would refuse a legitimate send, which is far worse than
+// missing a dialog and landing back on today's behaviour.
+// ---------------------------------------------------------------------------
+
+// The footer every Claude Code select renders. The confirm verb varies -- the
+// trust dialog says "Enter to confirm", the /model picker says "Enter to set as
+// default" -- but the cancel half is stable, and it is capitalised, so it does
+// not collide with the "esc to interrupt" a mid-turn pane shows.
+const DIALOG_FOOTER_RE = /Esc to cancel|Enter to confirm/;
+// How many trailing non-empty lines may hold that footer. Dialogs draw it last;
+// bounding it this tightly stops transcript text that merely quotes the phrase
+// from matching.
+const DIALOG_FOOTER_SCAN_LINES = 2;
+// "❯ 1. Yes, I trust this folder" / "  2. No, exit"
+const DIALOG_OPTION_RE = /^\s*(❯\s*)?(\d{1,2})\.\s+(\S.*?)\s*$/;
+
+function classifyDialog(screen) {
+  if (/Bypass Permissions mode/i.test(screen)) return 'bypass-permissions';
+  if (/trust this folder|Quick safety check/i.test(screen)) return 'trust-folder';
+  if (/trust these settings/i.test(screen)) return 'trust-settings';
+  return 'select';
+}
+
+function detectPaneDialog(screen) {
+  const text = String(screen || '');
+  const lines = text.split('\n');
+
+  const nonEmpty = lines.filter((line) => line.trim());
+  const footer = nonEmpty.slice(-DIALOG_FOOTER_SCAN_LINES);
+  if (!footer.some((line) => DIALOG_FOOTER_RE.test(line))) return null;
+
+  const options = [];
+  for (const rawLine of lines) {
+    const match = rawLine.match(DIALOG_OPTION_RE);
+    if (!match) continue;
+    options.push({
+      index: Number(match[2]),
+      label: match[3].trim(),
+      selected: Boolean(match[1])
+    });
+  }
+  // Footer without a numbered option list is not a shape we know how to answer.
+  if (options.length === 0) return null;
+
+  const selected = options.find((option) => option.selected);
+  // No visible cursor means we cannot say what an Enter would confirm, so this
+  // is not something to block on -- fall through to the pre-existing behaviour.
+  if (!selected) return null;
+
+  return {
+    kind: classifyDialog(text),
+    options,
+    selectedIndex: selected.index,
+    selectedLabel: selected.label
+  };
+}
+
+// Visible screen only -- deliberately no -S. Scrollback would match dialogs the
+// user answered minutes ago and block every subsequent send.
+async function readPaneDialog(target) {
+  try {
+    const screen = await runTmux(['capture-pane', '-p', '-J', '-t', target]);
+    return detectPaneDialog(screen);
+  } catch {
+    return null;
+  }
+}
+
+function describeDialog(dialog) {
+  const lines = [`${dialog.kind} dialog is open`];
+  for (const option of dialog.options) {
+    lines.push(`  ${option.selected ? '❯' : ' '} ${option.index}. ${option.label}`);
+  }
+  return lines.join('\n');
+}
+
 function detectNextState(prevState, deltaBytes, promptLike, quietMs) {
   const now = Date.now();
   const next = { ...prevState, lastStatusAt: now };
@@ -350,12 +436,32 @@ async function cmdSendInput(opts) {
   if (typeof opts.text !== 'string') throw new Error('text is required');
   const quietMs = Number(opts['quiet-ms'] || QUIET_MS_DEFAULT);
   const { key, resolved } = await ensurePaneState(session, opts.pane);
+  const force = Boolean(opts.force);
   const pressEnter = !opts['no-enter'];
   const payload = opts.text;
   const payloadBytes = Buffer.byteLength(payload);
   const hasPayload = payloadBytes > 0;
 
   const result = await withPaneLock(key, async () => {
+    // A modal select discards the pasted text but still consumes the Enter that
+    // follows, confirming whichever option happens to be highlighted.  On the
+    // bypass-permissions dialog that default is "No, exit", so an ordinary send
+    // silently kills the session.  Refuse rather than guess.
+    if (!force) {
+      const dialog = await readPaneDialog(resolved.target);
+      if (dialog) {
+        return {
+          ok: false,
+          blocked: true,
+          reason: 'dialog-open',
+          session: resolved.session,
+          paneId: resolved.paneId,
+          dialog,
+          hint: 'Answer it with `tmux-broker send-keys` (e.g. --key Down --key Enter), or re-send with --force to paste anyway.'
+        };
+      }
+    }
+
     if (hasPayload) {
       const bufferName = `voice_terminal_${randomUUID().replace(/-/g, '')}`;
       await runTmux(['load-buffer', '-b', bufferName, '-'], { input: payload });
@@ -379,6 +485,15 @@ async function cmdSendInput(opts) {
       pressEnter
     };
   });
+
+  if (result.blocked) {
+    // Exit 2, not 1: a caller can tell "the pane is waiting on a question" from
+    // "the command failed", and nothing was sent either way.
+    process.exitCode = 2;
+    if (opts.json) asJson(result);
+    else asPlain(`refused: nothing sent -- ${describeDialog(result.dialog)}\n${result.hint}`);
+    return;
+  }
 
   await refreshPaneState(session, resolved.paneId, Number.isFinite(quietMs) ? quietMs : QUIET_MS_DEFAULT);
   if (opts.json) asJson(result);
