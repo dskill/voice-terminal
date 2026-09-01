@@ -25,6 +25,7 @@ function usage() {
   console.error('');
   console.error('Commands:');
   console.error('  send-input    --session <name> [--pane <target>] --text <text> [--no-enter] [--force] [--json]');
+  console.error('  send-keys     --session <name> [--pane <target>] --key <Name> [--key <Name>...] [--repeat <n>] [--json]');
   console.error('  read-stream   --session <name> [--pane <target>] [--cursor <n>] [--json]');
   console.error('  read-snapshot --session <name> [--pane <target>] [--lines <n>] [--json]');
   console.error('  status        (--session <name> | --all) [--pane <target>] [--all-panes] [--quiet-ms <ms>] [--json]');
@@ -48,7 +49,13 @@ function parseArgv(argv) {
     if (value === undefined || value.startsWith('--')) {
       throw new Error(`missing value for --${key}`);
     }
-    opts[key] = value;
+    if (key === 'key') {
+      // Repeatable: --key Down --key Down --key Enter
+      if (!Array.isArray(opts.key)) opts.key = [];
+      opts.key.push(value);
+    } else {
+      opts[key] = value;
+    }
     i += 1;
   }
   return { command, opts };
@@ -278,6 +285,42 @@ async function readPaneDialog(target) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Named keys
+//
+// paste-buffer cannot answer a menu: with -p the payload is wrapped in
+// bracketed-paste markers, and Ink treats everything inside them as literal
+// text, never as key events. Only `tmux send-keys` with a key *name* delivers a
+// real keypress, which is why this exists alongside send-input.
+//
+// The whitelist is a safety feature, not tidiness: tmux silently types an
+// unrecognised key name into the pane as literal text, so a typo would land
+// "Dwon" in a sub-agent's prompt instead of failing.
+// ---------------------------------------------------------------------------
+const ALLOWED_KEYS = new Map([
+  ['up', 'Up'], ['down', 'Down'], ['left', 'Left'], ['right', 'Right'],
+  ['enter', 'Enter'], ['return', 'Enter'],
+  ['escape', 'Escape'], ['esc', 'Escape'],
+  ['tab', 'Tab'], ['btab', 'BTab'], ['shift-tab', 'BTab'],
+  ['space', 'Space'],
+  ['home', 'Home'], ['end', 'End'],
+  ['pageup', 'PageUp'], ['pgup', 'PageUp'],
+  ['pagedown', 'PageDown'], ['pgdn', 'PageDown']
+]);
+const MAX_KEYS = 64;
+// TUI menus re-render between keypresses; a short gap keeps a burst from
+// arriving mid-render, the same reason send-input waits before its Enter.
+const KEY_DELAY_MS = 75;
+
+function normalizeKeyName(raw) {
+  const resolved = ALLOWED_KEYS.get(String(raw || '').trim().toLowerCase());
+  if (!resolved) {
+    const allowed = [...new Set(ALLOWED_KEYS.values())].join(', ');
+    throw new Error(`unsupported key: ${raw} (allowed: ${allowed})`);
+  }
+  return resolved;
+}
+
 function describeDialog(dialog) {
   const lines = [`${dialog.kind} dialog is open`];
   for (const option of dialog.options) {
@@ -500,6 +543,44 @@ async function cmdSendInput(opts) {
   else asPlain(result);
 }
 
+async function cmdSendKeys(opts) {
+  const session = requireString(opts.session, 'session');
+  const rawKeys = Array.isArray(opts.key) ? opts.key : (opts.key ? [opts.key] : []);
+  if (rawKeys.length === 0) throw new Error('at least one --key is required');
+
+  const repeatRaw = opts.repeat !== undefined ? Number(opts.repeat) : 1;
+  const repeat = Number.isFinite(repeatRaw) ? Math.max(1, Math.trunc(repeatRaw)) : 1;
+
+  const keys = [];
+  for (let pass = 0; pass < repeat; pass += 1) {
+    for (const raw of rawKeys) keys.push(normalizeKeyName(raw));
+  }
+  if (keys.length > MAX_KEYS) {
+    throw new Error(`too many keys (${keys.length}); maximum is ${MAX_KEYS}`);
+  }
+
+  const quietMs = Number(opts['quiet-ms'] || QUIET_MS_DEFAULT);
+  const { key: paneKey, resolved } = await ensurePaneState(session, opts.pane);
+
+  // No dialog guard here: answering dialogs is the whole point of this command.
+  const result = await withPaneLock(paneKey, async () => {
+    for (let i = 0; i < keys.length; i += 1) {
+      if (i > 0) await new Promise((resolve) => setTimeout(resolve, KEY_DELAY_MS));
+      await runTmux(['send-keys', '-t', resolved.target, keys[i]]);
+    }
+    return {
+      ok: true,
+      session: resolved.session,
+      paneId: resolved.paneId,
+      keys
+    };
+  });
+
+  await refreshPaneState(session, resolved.paneId, Number.isFinite(quietMs) ? quietMs : QUIET_MS_DEFAULT);
+  if (opts.json) asJson(result);
+  else asPlain(result);
+}
+
 async function cmdReadStream(opts) {
   const session = requireString(opts.session, 'session');
   const quietMs = Number(opts['quiet-ms'] || QUIET_MS_DEFAULT);
@@ -673,6 +754,9 @@ async function main() {
   switch (command) {
     case 'send-input':
       await cmdSendInput(opts);
+      return;
+    case 'send-keys':
+      await cmdSendKeys(opts);
       return;
     case 'read-stream':
       await cmdReadStream(opts);
