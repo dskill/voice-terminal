@@ -26,7 +26,7 @@ Completion monitoring policy:
 
 Answering dialogs (arrow-key menus):
 - `send-input` only delivers text plus Enter. It cannot answer a selection menu, so it refuses when the pane is on one: you get `ok:false`, `blocked:true`, exit code 2, and the parsed options. Nothing was sent — this is not a failure, it is the session asking you a question.
-- Answer with named keys: `tmux-broker send-keys --session <name> --key Down --key Enter`. Allowed keys: Up, Down, Left, Right, Enter, Escape, Tab, BTab, Space, Home, End, PageUp, PageDown.
+- Answer with named keys: `tmux-broker send-keys --session <name> --key Down --key Enter`. Allowed keys: Up, Down, Left, Right, Enter, Escape, Tab, BTab, Space, BSpace, Home, End, PageUp, PageDown.
 - Read `selectedIndex` from the blocked response and move to the option you want before sending Enter. Never send a bare Enter without checking what is highlighted — on the bypass-permissions warning the pre-highlighted option is "No, exit", which kills the session.
 - `tmux-broker status` reports `state: "blocked"` for a session parked on a dialog. Treat that as needing attention, not as idle.
 - Still do not use raw `tmux send-keys`. `send-keys` above is the broker command and is the supported path.

@@ -303,6 +303,7 @@ const ALLOWED_KEYS = new Map([
   ['escape', 'Escape'], ['esc', 'Escape'],
   ['tab', 'Tab'], ['btab', 'BTab'], ['shift-tab', 'BTab'],
   ['space', 'Space'],
+  ['bspace', 'BSpace'], ['backspace', 'BSpace'],
   ['home', 'Home'], ['end', 'End'],
   ['pageup', 'PageUp'], ['pgup', 'PageUp'],
   ['pagedown', 'PageDown'], ['pgdn', 'PageDown']
