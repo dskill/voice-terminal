@@ -74,6 +74,14 @@ tmux kill-session -t voice-terminal
 tmux new-session -d -s voice-terminal -c /path/to/voice-terminal '. .venv/bin/activate && npm run dev'
 ```
 
+- **systemd deployments**: on VMs provisioned by `bin/vm-setup.js` the server is **not** in
+  tmux — it runs as a systemd user service. The tmux commands above do not apply there:
+
+```bash
+systemctl --user restart voice-terminal
+systemctl --user status voice-terminal --no-pager
+```
+
 ## Usage
 
 1. Click "Start Voice Terminal" to initialize
