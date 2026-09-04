@@ -75,11 +75,18 @@ You are being controlled via a voice interface. Be concise. After completing req
 
 ## Launching Codex Sessions
 
-Always start Codex with `--model gpt-5.4` to ensure the latest model is used:
+Always start Codex with `--model gpt-5.6-sol` — the flagship tier, and the same
+slug `ORCHESTRATOR_CONFIG.codex.defaultModel` in `src/server.js` uses. Keep the
+two in sync; they disagreed before (`gpt-5.4` here, a non-existent
+`gpt-5.3-codex-spark` there) and `gpt-5.4` is now hidden from the CLI's own
+model picker.
 
 ```bash
-tmux new-session -d -s <session-name> -c /home/exedev/voice-terminal 'codex --dangerously-bypass-approvals-and-sandbox --model gpt-5.4'
+tmux new-session -d -s <session-name> -c /home/exedev/voice-terminal 'codex --sandbox danger-full-access --ask-for-approval never --model gpt-5.6-sol'
 ```
+
+Run `codex login status` first — an unauthenticated CLI fails at spawn no matter
+which model is requested.
 
 ## Known Issues / TODOs
 

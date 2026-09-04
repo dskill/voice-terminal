@@ -53,11 +53,11 @@ Control tool available to the orchestrator only:
 
 When the user asks to start a new Claude or Codex tmux session, use the same launch flags as the UI:
 - Claude session command: `claude --dangerously-skip-permissions --model claude-opus-5`
-- Codex session command: `codex --dangerously-bypass-approvals-and-sandbox`
+- Codex session command: `codex --sandbox danger-full-access --ask-for-approval never --model gpt-5.6-sol`
 
 If creating sessions manually, use:
 - `tmux new-session -d -s <session-name> -c $HOME 'claude --dangerously-skip-permissions --model claude-opus-5'`
-- `tmux new-session -d -s <session-name> -c $HOME 'codex --dangerously-bypass-approvals-and-sandbox'`
+- `tmux new-session -d -s <session-name> -c $HOME 'codex --sandbox danger-full-access --ask-for-approval never --model gpt-5.6-sol'`
 
 ## VM Fleet Management (exe.dev Control Plane)
 

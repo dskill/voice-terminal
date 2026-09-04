@@ -32,8 +32,11 @@ const ORCHESTRATOR_CONFIG = {
   },
   codex: {
     kind: 'codex',
-    label: 'Codex (Spark)',
-    defaultModel: 'gpt-5.3-codex-spark'
+    // Slugs come from the codex CLI's own model table; 'gpt-5.3-codex-spark'
+    // was set here but is not a model codex-cli offers, so every Codex turn
+    // failed at spawn. Sol is the flagship tier.
+    label: 'Codex (GPT-5.6 Sol)',
+    defaultModel: 'gpt-5.6-sol'
   }
 };
 
@@ -508,9 +511,11 @@ function buildSessionName(kind) {
 async function createTmuxSession(kind) {
   const safeKind = kind === 'codex' ? 'codex' : 'claude';
   const sessionName = buildSessionName(safeKind);
+  // Model slugs come from ORCHESTRATOR_CONFIG so a spawned sub-agent can't run
+  // a different model than the orchestrator picker advertises.
   const command = safeKind === 'codex'
-    ? 'codex --sandbox danger-full-access --ask-for-approval never'
-    : 'claude --dangerously-skip-permissions --model claude-opus-5';
+    ? `codex --sandbox danger-full-access --ask-for-approval never --model ${ORCHESTRATOR_CONFIG.codex.defaultModel}`
+    : `claude --dangerously-skip-permissions --model ${ORCHESTRATOR_CONFIG.claude.defaultModel}`;
   await execFileAsync('tmux', ['new-session', '-d', '-s', sessionName, '-c', process.env.HOME, command], { timeout: 10_000 });
   return { name: sessionName, kind: safeKind, command };
 }
@@ -1104,14 +1109,35 @@ function createCodexAdapter(emit) {
   let activeProcess = null;
   let lastStartedThreadId = null;
   let hasSessionHistory = false;
+  // Codex reports each item twice, at item.started and again at item.completed.
+  // Emitting on both duplicated every command in the transcript (and fired the
+  // tool cue twice), so tool items emit once, on whichever arrives first.
+  let emittedToolItemIds = new Set();
 
-  function parseCodexItem(item) {
+  function parseCodexItem(item, phase) {
     if (!item || typeof item !== 'object') return;
     const type = item.type;
 
     if (type === 'agent_message' || type === 'agentMessage') {
+      // Only the completed item carries the finished text; the started one
+      // would replay a prefix of the same message.
+      if (phase !== 'completed') return;
       const text = typeof item.text === 'string' ? item.text : '';
       if (text) emit({ type: 'partial', text });
+      return;
+    }
+
+    const isToolItem = type === 'command_execution' || type === 'commandExecution'
+      || type === 'file_change' || type === 'fileChange';
+    if (!isToolItem) return;
+
+    // Items without an id can't be de-duplicated, so only trust the first
+    // sighting (started) for those rather than emitting both phases.
+    const itemKey = item.id ? String(item.id) : null;
+    if (itemKey) {
+      if (emittedToolItemIds.has(itemKey)) return;
+      emittedToolItemIds.add(itemKey);
+    } else if (phase !== 'started') {
       return;
     }
 
@@ -1129,17 +1155,15 @@ function createCodexAdapter(emit) {
       return;
     }
 
-    if (type === 'file_change' || type === 'fileChange') {
-      emit({
-        type: 'tool-call',
-        toolName: 'apply_patch',
-        toolId: item.id,
-        input: {
-          status: item.status,
-          changes: item.changes
-        }
-      });
-    }
+    emit({
+      type: 'tool-call',
+      toolName: 'apply_patch',
+      toolId: item.id,
+      input: {
+        status: item.status,
+        changes: item.changes
+      }
+    });
   }
 
   function start() {
@@ -1158,6 +1182,7 @@ function createCodexAdapter(emit) {
     ready = false;
     lastStartedThreadId = null;
     hasSessionHistory = false;
+    emittedToolItemIds = new Set();
     if (activeProcess) {
       activeProcess.kill('SIGTERM');
       activeProcess = null;
@@ -1171,6 +1196,8 @@ function createCodexAdapter(emit) {
     if (activeProcess) {
       return { error: 'Codex is still processing the previous request' };
     }
+
+    emittedToolItemIds = new Set();
 
     const args = [
       '--dangerously-bypass-approvals-and-sandbox',
@@ -1221,12 +1248,12 @@ function createCodexAdapter(emit) {
       }
 
       if (msg.type === 'item.completed') {
-        parseCodexItem(msg.item);
+        parseCodexItem(msg.item, 'completed');
         return;
       }
 
       if (msg.type === 'item.started') {
-        parseCodexItem(msg.item);
+        parseCodexItem(msg.item, 'started');
         return;
       }
 
