@@ -4,8 +4,6 @@ export default function SettingsPanel({
   open,
   autoSend,
   onToggleAutoSend,
-  ttsEnabled,
-  onToggleTTSEnabled,
   orchestrator,
   orchestratorOptions,
   onSelectOrchestrator,
@@ -55,23 +53,6 @@ export default function SettingsPanel({
                 onChange={(e) => onToggleAutoSend(e.target.checked)}
                 className="w-4 h-4 accent-emerald-500"
               />
-            </label>
-
-            <label className="flex items-center justify-between gap-3 px-3 py-2 rounded bg-zinc-950/50 border border-zinc-800/50">
-              <div>
-                <div className="text-sm text-zinc-300 font-medium">Audio Output</div>
-                <div className="text-xs text-zinc-500">Mute/unmute spoken response audio.</div>
-              </div>
-              <button
-                onClick={() => onToggleTTSEnabled(!ttsEnabled)}
-                className={`px-3 py-1.5 rounded text-xs font-semibold border transition-colors ${
-                  ttsEnabled
-                    ? 'bg-emerald-950/40 border-emerald-800/40 text-emerald-400 hover:bg-emerald-950/60'
-                    : 'bg-red-950/30 border-red-900/30 text-red-400 hover:bg-red-950/50'
-                }`}
-              >
-                {ttsEnabled ? 'Audio On' : 'Audio Off'}
-              </button>
             </label>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">

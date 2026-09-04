@@ -9,6 +9,7 @@ import MicButton from './components/MicButton';
 import InputArea from './components/InputArea';
 import SessionRadialMenu from './components/SessionRadialMenu';
 import SettingsPanel from './components/SettingsPanel';
+import AudioToggle from './components/AudioToggle';
 import { resumeSharedAudio } from './audio/sharedContext';
 
 function formatFileSize(bytes) {
@@ -202,16 +203,19 @@ export default function App() {
   );
   const speech = useSpeechRecognition();
   const tts = useTTS();
+  // Cues follow the mute control: muting audio should silence the whole
+  // interface, not just spoken responses.
   const {
     unlock: unlockDebugCues,
+    beginTurn: beginCueTurn,
     playMicStart,
     playMicStop,
     playTTSStart,
     playTTSStop,
     playSessionComplete,
     playToolDispatch,
-    playStreamChunk,
-  } = useDebugAudioCues();
+    playResponseStart,
+  } = useDebugAudioCues(ttsEnabled);
   // FIFO, not a single slot: one header arrives per binary frame, and a single
   // slot silently discarded a frame whenever two headers landed back to back.
   const ttsChunkMetaRef = useRef([]);
@@ -344,38 +348,53 @@ export default function App() {
         return;
       }
 
+      // Deltas and the cue/flash are resolved here rather than inside the
+      // state updater. React is free to call an updater more than once, and a
+      // chime plus a timer fired from inside one is a side effect that gets
+      // replayed when it does.
+      const completed = [];
+      for (const [sessionName, status] of Object.entries(nextStatus)) {
+        const previousSeen = Number(completionSeenRef.current[sessionName] || 0);
+        const delta = Math.max(0, status.completionCount - previousSeen);
+        completionSeenRef.current[sessionName] = status.completionCount;
+        if (delta > 0) completed.push({ sessionName, delta });
+      }
+      // Seen counts for vanished sessions are deliberately kept: dropping them
+      // makes a session that briefly disappears from a poll come back looking
+      // like it just completed everything it had ever done.
+
+      if (completed.length > 0) {
+        // One chime per poll tick, however many completions it carried. The
+        // broker counts a completion on every working -> quiet transition, so a
+        // pane that prints in bursts can report several at once for what the
+        // user experienced as a single event.
+        playSessionComplete();
+
+        if (completed.some((entry) => entry.sessionName === activeTmuxSession)) {
+          if (doneFlashTimerRef.current) clearTimeout(doneFlashTimerRef.current);
+          setDoneFlashVisible(true);
+          doneFlashTimerRef.current = setTimeout(() => setDoneFlashVisible(false), 2000);
+        }
+      }
+
       setTmuxUnreadCompletions((prev) => {
         const nextUnread = { ...prev };
-        for (const [sessionName, status] of Object.entries(nextStatus)) {
-          const previousSeen = Number(completionSeenRef.current[sessionName] || 0);
-          const delta = Math.max(0, status.completionCount - previousSeen);
-          if (delta > 0) {
-            playSessionComplete(delta);
-            if (sessionName === activeTmuxSession) {
-              if (doneFlashTimerRef.current) clearTimeout(doneFlashTimerRef.current);
-              setDoneFlashVisible(true);
-              doneFlashTimerRef.current = setTimeout(() => setDoneFlashVisible(false), 2000);
-              nextUnread[sessionName] = 0;
-            } else {
-              nextUnread[sessionName] = Number(nextUnread[sessionName] || 0) + delta;
-            }
-          }
-          completionSeenRef.current[sessionName] = status.completionCount;
+        for (const { sessionName, delta } of completed) {
+          nextUnread[sessionName] = sessionName === activeTmuxSession
+            ? 0
+            : Number(nextUnread[sessionName] || 0) + delta;
         }
-
         for (const sessionName of Object.keys(nextUnread)) {
-          if (!nextStatus[sessionName]) {
-            delete nextUnread[sessionName];
-            delete completionSeenRef.current[sessionName];
-          }
+          if (!nextStatus[sessionName]) delete nextUnread[sessionName];
         }
-
         return nextUnread;
       });
     });
 
     ws.setHandler('tool-call', (data) => {
-      playToolDispatch();
+      // seq is unique within a turn and covers control-tool calls, which the
+      // server broadcasts without a toolId.
+      playToolDispatch(data.toolId ?? `seq-${data.seq}`);
       setStreamingMessage((prev) => {
         const current = prev || { text: '', toolCalls: [], timeline: [] };
         const timeline = appendTimelineEvent(current.timeline, {
@@ -391,7 +410,7 @@ export default function App() {
 
     ws.setHandler('partial', (data) => {
       if ((data.text || '').trim()) {
-        playStreamChunk();
+        playResponseStart();
       }
       setStreamingMessage((prev) => {
         const current = prev || { text: '', toolCalls: [], timeline: [] };
@@ -596,7 +615,7 @@ export default function App() {
     ws.setTTSEnabled,
     playSessionComplete,
     playToolDispatch,
-    playStreamChunk,
+    playResponseStart,
     ttsEnabled
   ]);
 
@@ -756,6 +775,7 @@ export default function App() {
         setShowInput(false);
         setInputText('');
         setIsProcessing(true);
+        beginCueTurn();
         setLiveText(`Sending to ${formatOrchestratorLabel(selectedOrchestrator)}...`);
         addMessage('user', finalText);
         ws.sendCommand(finalText);
@@ -771,7 +791,7 @@ export default function App() {
     } finally {
       setIsTranscribing(false);
     }
-  }, [speech, ws, autoSend, addMessage, playMicStop, selectedOrchestrator]);
+  }, [speech, ws, autoSend, addMessage, playMicStop, beginCueTurn, selectedOrchestrator]);
 
   const toggleRecording = useCallback(() => {
     if (isProcessing || isTranscribing) return;
@@ -810,10 +830,11 @@ export default function App() {
     }
 
     setIsProcessing(true);
+    beginCueTurn();
     setLiveText(`Sending to ${formatOrchestratorLabel(selectedOrchestrator)}...`);
     addMessage('user', text);
     ws.sendCommand(text);
-  }, [inputText, addMessage, ws, selectedOrchestrator]);
+  }, [inputText, addMessage, ws, beginCueTurn, selectedOrchestrator]);
 
   const toggleAutoSend = useCallback((enabled) => {
     setAutoSend(enabled);
@@ -1358,6 +1379,13 @@ export default function App() {
       </div>
 
       <div className="absolute top-2 right-3 z-30 flex items-center gap-2">
+        <AudioToggle
+          enabled={ttsEnabled}
+          unlocked={tts.isAudioUnlocked}
+          onToggle={toggleTTSEnabled}
+          onUnlock={handleEnableAudio}
+        />
+
         <button
           onClick={() => setShowSettings(true)}
           className="w-9 h-9 rounded-md bg-zinc-800/85 text-zinc-300 border border-zinc-600/50 hover:bg-zinc-700 hover:text-white transition-colors flex items-center justify-center"
@@ -1537,7 +1565,7 @@ export default function App() {
 
                 <MicButton
                   isRecording={speech.isListening}
-                  audioLevel={speech.audioLevel}
+                  analyserRef={speech.analyserRef}
                   isProcessing={isMicInCancelMode}
                   isSendMode={false}
                   disabled={!ws.sessionRunning || isTranscribing}
@@ -1605,8 +1633,6 @@ export default function App() {
         open={showSettings}
         autoSend={autoSend}
         onToggleAutoSend={toggleAutoSend}
-        ttsEnabled={ttsEnabled}
-        onToggleTTSEnabled={toggleTTSEnabled}
         orchestrator={selectedOrchestrator}
         orchestratorOptions={ORCHESTRATOR_OPTIONS.filter((o) => (ws.supportedOrchestrators || []).includes(o.value))}
         onSelectOrchestrator={handleSelectOrchestrator}

@@ -7,6 +7,16 @@ function getCueContext() {
   return getSharedAudioContext();
 }
 
+// A cue is only useful if it marks something the user would otherwise miss.
+// Per-token cues were tried and removed: Claude emits one `partial` per text
+// delta, so a cue there fired several times a second for the length of every
+// response and read as a constant clicking noise rather than as information.
+// Everything below is either once-per-turn or explicitly throttled.
+const TOOL_CUE_MIN_INTERVAL_MS = 900;
+// Tool ids seen in this turn, so a tool reported at both start and completion
+// (or re-broadcast on reconnect) doesn't cue twice.
+const TOOL_ID_MEMORY = 64;
+
 function playTone({
   startFreq,
   endFreq = startFreq,
@@ -67,8 +77,20 @@ function playTone({
   }
 }
 
-export default function useDebugAudioCues() {
-  const lastStreamChunkCueAtRef = useRef(0);
+// `enabled` follows the app's mute control. Cues used to play regardless of it,
+// so muting audio silenced speech but left the interface chirping.
+export default function useDebugAudioCues(enabled = true) {
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
+
+  const lastToolCueAtRef = useRef(0);
+  const cuedToolIdsRef = useRef([]);
+  const turnCuedRef = useRef(false);
+
+  const cue = useCallback((fn) => {
+    if (!enabledRef.current) return;
+    fn();
+  }, []);
 
   const unlock = useCallback(async () => {
     try {
@@ -80,58 +102,80 @@ export default function useDebugAudioCues() {
 
   const playMicStart = useCallback(() => {
     // Soft ascending double tone.
-    playTone({ startFreq: 520, endFreq: 760, type: 'sine', duration: 0.12, volume: 0.42, release: 0.12 });
-    playTone({ startFreq: 720, endFreq: 980, type: 'sine', duration: 0.1, volume: 0.24, whenOffset: 0.025, release: 0.1 });
-  }, []);
+    cue(() => {
+      playTone({ startFreq: 520, endFreq: 760, type: 'sine', duration: 0.12, volume: 0.42, release: 0.12 });
+      playTone({ startFreq: 720, endFreq: 980, type: 'sine', duration: 0.1, volume: 0.24, whenOffset: 0.025, release: 0.1 });
+    });
+  }, [cue]);
 
   const playMicStop = useCallback(() => {
     // Mirror of mic start: soft descending double tone.
-    playTone({ startFreq: 980, endFreq: 720, type: 'sine', duration: 0.1, volume: 0.24, release: 0.1 });
-    playTone({ startFreq: 760, endFreq: 520, type: 'sine', duration: 0.12, volume: 0.42, whenOffset: 0.02, release: 0.12 });
-  }, []);
+    cue(() => {
+      playTone({ startFreq: 980, endFreq: 720, type: 'sine', duration: 0.1, volume: 0.24, release: 0.1 });
+      playTone({ startFreq: 760, endFreq: 520, type: 'sine', duration: 0.12, volume: 0.42, whenOffset: 0.02, release: 0.12 });
+    });
+  }, [cue]);
 
   const playTTSStart = useCallback(() => {
     // Brief warm low-pitched ping.
-    playTone({ startFreq: 240, endFreq: 275, type: 'triangle', duration: 0.14, volume: 0.5, release: 0.14, warm: true });
-  }, []);
+    cue(() => playTone({ startFreq: 240, endFreq: 275, type: 'triangle', duration: 0.14, volume: 0.5, release: 0.14, warm: true }));
+  }, [cue]);
 
   const playTTSStop = useCallback(() => {
     // Brief soft high-pitched ping.
-    playTone({ startFreq: 1320, endFreq: 1180, type: 'sine', duration: 0.09, volume: 0.34, release: 0.09 });
+    cue(() => playTone({ startFreq: 1320, endFreq: 1180, type: 'sine', duration: 0.09, volume: 0.34, release: 0.09 }));
+  }, [cue]);
+
+  // One chime per notification, however many completions the poll reports at
+  // once. The tmux broker counts a completion on every working -> quiet
+  // transition, so a bursty pane could deliver a delta of 3 and fire a
+  // three-chime volley for what the user experiences as one event.
+  const playSessionComplete = useCallback(() => {
+    cue(() => {
+      playTone({ startFreq: 740, endFreq: 920, type: 'triangle', duration: 0.12, volume: 0.34, release: 0.12, warm: true });
+      playTone({ startFreq: 920, endFreq: 1180, type: 'sine', duration: 0.11, volume: 0.22, release: 0.1, whenOffset: 0.03 });
+    });
+  }, [cue]);
+
+  // Marks the moment a response begins, replacing the old per-chunk cue. Fires
+  // at most once per turn; `beginTurn` reopens it.
+  const playResponseStart = useCallback(() => {
+    if (turnCuedRef.current) return;
+    turnCuedRef.current = true;
+    cue(() => playTone({ startFreq: 620, endFreq: 820, type: 'sine', duration: 0.08, volume: 0.16, attack: 0.004, release: 0.08, warm: true }));
+  }, [cue]);
+
+  const beginTurn = useCallback(() => {
+    turnCuedRef.current = false;
+    cuedToolIdsRef.current = [];
   }, []);
 
-  const playSessionComplete = useCallback((count = 1) => {
-    const repeats = Math.max(1, Math.min(3, Number(count) || 1));
-    for (let i = 0; i < repeats; i += 1) {
-      const baseOffset = i * 0.18;
-      // Satisfying major-ish chime stack.
-      playTone({ startFreq: 740, endFreq: 920, type: 'triangle', duration: 0.12, volume: 0.34, release: 0.12, whenOffset: baseOffset, warm: true });
-      playTone({ startFreq: 920, endFreq: 1180, type: 'sine', duration: 0.11, volume: 0.22, release: 0.1, whenOffset: baseOffset + 0.03 });
+  // Deduplicated by tool id and rate-limited, so a burst of parallel tool calls
+  // is one tick rather than a rattle.
+  const playToolDispatch = useCallback((toolId) => {
+    const key = toolId == null ? null : String(toolId);
+    if (key) {
+      if (cuedToolIdsRef.current.includes(key)) return;
+      cuedToolIdsRef.current.push(key);
+      if (cuedToolIdsRef.current.length > TOOL_ID_MEMORY) cuedToolIdsRef.current.shift();
     }
-  }, []);
 
-  const playToolDispatch = useCallback(() => {
-    // Tiny click-like tick to indicate tool dispatch.
-    playTone({ startFreq: 1620, endFreq: 1340, type: 'square', duration: 0.035, volume: 0.08, attack: 0.001, release: 0.035 });
-  }, []);
-
-  const playStreamChunk = useCallback(() => {
-    // Rate-limit chunk cues so streaming text doesn't become noisy.
     const nowMs = Date.now();
-    if ((nowMs - lastStreamChunkCueAtRef.current) < 180) return;
-    lastStreamChunkCueAtRef.current = nowMs;
-    // Soft, brief blip.
-    playTone({ startFreq: 980, endFreq: 1080, type: 'sine', duration: 0.03, volume: 0.035, attack: 0.002, release: 0.03, warm: true });
-  }, []);
+    if ((nowMs - lastToolCueAtRef.current) < TOOL_CUE_MIN_INTERVAL_MS) return;
+    lastToolCueAtRef.current = nowMs;
+
+    cue(() => playTone({ startFreq: 1620, endFreq: 1340, type: 'square', duration: 0.035, volume: 0.08, attack: 0.001, release: 0.035 }));
+  }, [cue]);
 
   return {
     unlock,
+    beginTurn,
     playMicStart,
     playMicStop,
     playTTSStart,
     playTTSStop,
     playSessionComplete,
     playToolDispatch,
-    playStreamChunk,
+    playResponseStart,
   };
 }

@@ -4,7 +4,6 @@ import { getSharedAudioContext } from '../audio/sharedContext';
 export default function useSpeechRecognition() {
   const [isListening, setIsListening] = useState(false);
   const [error, setError] = useState(null);
-  const [audioLevel, setAudioLevel] = useState(0);
   const mediaRecorderRef = useRef(null);
   const mediaStreamRef = useRef(null);
   const chunksRef = useRef([]);
@@ -12,8 +11,6 @@ export default function useSpeechRecognition() {
   const audioContextRef = useRef(null);
   const analyserRef = useRef(null);
   const sourceNodeRef = useRef(null);
-  const rafIdRef = useRef(null);
-  const dataArrayRef = useRef(null);
 
   useEffect(() => {
     return () => {
@@ -23,18 +20,13 @@ export default function useSpeechRecognition() {
       if (mediaStreamRef.current) {
         mediaStreamRef.current.getTracks().forEach((t) => t.stop());
       }
-      if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current);
       if (sourceNodeRef.current) sourceNodeRef.current.disconnect();
       if (analyserRef.current) analyserRef.current.disconnect();
       // Never close the context here — it is shared with TTS playback.
     };
   }, []);
 
-  const stopAudioMeter = useCallback(() => {
-    if (rafIdRef.current) {
-      cancelAnimationFrame(rafIdRef.current);
-      rafIdRef.current = null;
-    }
+  const stopAnalyser = useCallback(() => {
     if (sourceNodeRef.current) {
       sourceNodeRef.current.disconnect();
       sourceNodeRef.current = null;
@@ -47,8 +39,6 @@ export default function useSpeechRecognition() {
     // closing it here used to tear down TTS output too, and the per-recording
     // create/close churn counted against Safari's concurrent-context cap.
     audioContextRef.current = null;
-    dataArrayRef.current = null;
-    setAudioLevel(0);
   }, []);
 
   // Stopping every track is what releases the microphone. While any capture
@@ -61,40 +51,28 @@ export default function useSpeechRecognition() {
     }
   }, []);
 
-  const startAudioMeter = useCallback(async (stream) => {
-    stopAudioMeter();
+  // Builds the analysis graph and stops there. There used to be a metering
+  // loop here that computed one RMS number per animation frame and pushed it
+  // into React state, re-rendering the entire app 60 times a second for the
+  // duration of every recording. The visualiser reads this node directly on
+  // its own frame loop instead, so nothing here needs to run per frame.
+  const startAnalyser = useCallback(async (stream) => {
+    stopAnalyser();
 
     const ctx = getSharedAudioContext();
     const source = ctx.createMediaStreamSource(stream);
     const analyser = ctx.createAnalyser();
-    analyser.fftSize = 256;
-    analyser.smoothingTimeConstant = 0.75;
+    // 1024 gives ~21Hz bins at the shared context's 22.05kHz rate, enough to
+    // resolve the speech range into bands; the visualiser does its own
+    // smoothing, so the analyser's is kept low to stay responsive.
+    analyser.fftSize = 1024;
+    analyser.smoothingTimeConstant = 0.6;
     source.connect(analyser);
 
-    const dataArray = new Uint8Array(analyser.frequencyBinCount);
     audioContextRef.current = ctx;
     sourceNodeRef.current = source;
     analyserRef.current = analyser;
-    dataArrayRef.current = dataArray;
-
-    const tick = () => {
-      if (!analyserRef.current || !dataArrayRef.current) return;
-      analyserRef.current.getByteTimeDomainData(dataArrayRef.current);
-
-      let sum = 0;
-      for (let i = 0; i < dataArrayRef.current.length; i++) {
-        const centered = (dataArrayRef.current[i] - 128) / 128;
-        sum += centered * centered;
-      }
-      const rms = Math.sqrt(sum / dataArrayRef.current.length);
-      const normalized = Math.min(1, Math.max(0, rms * 4));
-      setAudioLevel(normalized);
-
-      rafIdRef.current = requestAnimationFrame(tick);
-    };
-
-    tick();
-  }, [stopAudioMeter]);
+  }, [stopAnalyser]);
 
   const startListening = useCallback(async () => {
     if (!isSupported) return false;
@@ -103,7 +81,7 @@ export default function useSpeechRecognition() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaStreamRef.current = stream;
-      await startAudioMeter(stream);
+      await startAnalyser(stream);
 
       const mimeCandidates = [
         'audio/webm;codecs=opus',
@@ -135,7 +113,7 @@ export default function useSpeechRecognition() {
         // A failed recorder never fires onstop, so release the mic here or the
         // capture track stays live for the rest of the page's life.
         releaseStream();
-        stopAudioMeter();
+        stopAnalyser();
         setIsListening(false);
       };
 
@@ -144,7 +122,7 @@ export default function useSpeechRecognition() {
         chunksRef.current = [];
 
         releaseStream();
-        stopAudioMeter();
+        stopAnalyser();
 
         if (stopResolveRef.current) {
           stopResolveRef.current(blob);
@@ -164,12 +142,12 @@ export default function useSpeechRecognition() {
       // getUserMedia may have succeeded before this threw (e.g. an unsupported
       // MediaRecorder mime type), which would strand a live capture track.
       releaseStream();
-      stopAudioMeter();
+      stopAnalyser();
       setError(err?.message || 'microphone-access-denied');
       setIsListening(false);
       return false;
     }
-  }, [isListening, startAudioMeter, stopAudioMeter, releaseStream]);
+  }, [isListening, startAnalyser, stopAnalyser, releaseStream]);
 
   const stopListening = useCallback(async () => {
     const recorder = mediaRecorderRef.current;
@@ -178,7 +156,7 @@ export default function useSpeechRecognition() {
     if (recorder.state === 'inactive') {
       // onstop never ran for this recorder, so nothing has released the mic.
       releaseStream();
-      stopAudioMeter();
+      stopAnalyser();
       return new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' });
     }
 
@@ -187,7 +165,7 @@ export default function useSpeechRecognition() {
       recorder.stop();
       setIsListening(false);
     });
-  }, [releaseStream, stopAudioMeter]);
+  }, [releaseStream, stopAnalyser]);
 
   const isSupported = typeof window !== 'undefined' &&
     typeof navigator !== 'undefined' &&
@@ -197,7 +175,9 @@ export default function useSpeechRecognition() {
   return {
     isListening,
     error,
-    audioLevel,
+    // Handed to the visualiser so it can run its own rAF loop against the live
+    // node instead of re-rendering React at frame rate.
+    analyserRef,
     isSupported,
     startListening,
     stopListening,

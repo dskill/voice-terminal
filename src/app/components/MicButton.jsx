@@ -1,6 +1,7 @@
 import React from 'react';
+import MicWaveform from './MicWaveform';
 
-export default function MicButton({ isRecording, audioLevel = 0, isProcessing, isSendMode, disabled, onClick, onCancel, onLongPress }) {
+export default function MicButton({ isRecording, analyserRef, isProcessing, isSendMode, disabled, onClick, onCancel, onLongPress }) {
   let bgClass = 'bg-gradient-to-br from-zinc-600 to-zinc-800 shadow-zinc-900/40 border border-zinc-500/20';
   let extraClass = '';
 
@@ -114,33 +115,7 @@ export default function MicButton({ isRecording, audioLevel = 0, isProcessing, i
         ${bgClass} ${extraClass}
       `}
     >
-      {isRecording && (
-        <div className="absolute -inset-8 pointer-events-none">
-          {Array.from({ length: 18 }).map((_, i) => {
-            const angle = (360 / 18) * i;
-            const mod = 0.55 + (Math.sin(i * 1.7) ** 2) * 0.45;
-            const level = Math.max(0.15, Math.min(1, audioLevel * 10 * mod + 0.12));
-            const height = 8 + Math.round(level * 22);
-            return (
-              <div
-                key={i}
-                className="absolute left-1/2 top-1/2 overflow-visible pointer-events-none"
-                style={{
-                  transform: `rotate(${angle}deg)`,
-                  width: '3px',
-                  height: 0,
-                  marginLeft: '-1.5px',
-                }}
-              >
-                <span
-                  className="block w-[3px] rounded-full bg-rose-300/90 shadow-[0_0_10px_rgba(251,113,133,0.8)] transition-[height] duration-75 absolute pointer-events-none"
-                  style={{ height: `${height}px`, bottom: '44px' }}
-                />
-              </div>
-            );
-          })}
-        </div>
-      )}
+      <MicWaveform analyserRef={analyserRef} active={isRecording} />
       <svg className="w-8 h-8" viewBox="0 0 24 24" fill="currentColor">
         {icon}
       </svg>
