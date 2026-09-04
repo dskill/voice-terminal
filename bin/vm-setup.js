@@ -149,12 +149,21 @@ def atomic_write(path, data, fallback_mode):
 
 settings_path = os.path.join(home, ".claude", "settings.json")
 settings = load(settings_path)
-if settings.get("skipDangerousModePermissionPrompt") is not True:
-    settings["skipDangerousModePermissionPrompt"] = True
+# skipDangerousModePermissionPrompt: the bypass-permissions warning is a modal
+#   dialog, and every session here is launched with --dangerously-skip-permissions.
+# promptSuggestionEnabled: the dim follow-up suggestion is drawn *inside* the input
+#   box, so a pane snapshot cannot tell it apart from text the orchestrator typed.
+desired = {
+    "skipDangerousModePermissionPrompt": True,
+    "promptSuggestionEnabled": False,
+}
+changed = [k for k, v in desired.items() if settings.get(k) is not v]
+if changed:
+    settings.update(desired)
     atomic_write(settings_path, settings, 0o644)
-    print("CHANGED:bypass-dialog-accepted")
+    print("CHANGED:settings " + " ".join(sorted(changed)))
 else:
-    print("SKIP:bypass-dialog-already-accepted")
+    print("SKIP:settings-already-applied")
 
 config_path = os.path.join(home, ".claude.json")
 config = load(config_path)

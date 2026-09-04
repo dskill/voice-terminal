@@ -27,18 +27,31 @@ Once complete, access the app at `https://<hostname>:3456/`.
 
 ## Pre-accepting Claude Code's first-run dialogs
 
-Step 3 sets two config keys on the target VM:
+Step 3 sets three config keys on the target VM:
 
 - `skipDangerousModePermissionPrompt: true` in `~/.claude/settings.json`
+- `promptSuggestionEnabled: false` in `~/.claude/settings.json`
 - `projects["$HOME"].hasTrustDialogAccepted: true` and the same for
   `~/voice-terminal`, in `~/.claude.json`
 
-Both suppress an arrow-key selection dialog that a newly created tmux session
+The first and third suppress an arrow-key selection dialog that a newly created tmux session
 would otherwise sit on. This matters because `tmux-broker send-input` cannot
 answer a menu — it pastes text the dialog discards, then sends Enter, which
 confirms whichever option is highlighted. On the bypass-permissions warning the
 pre-highlighted option is **"No, exit"**, so the session dies instead of
 receiving its first briefing.
+
+`promptSuggestionEnabled` is a different problem. Claude Code draws a dim
+follow-up suggestion *inside* the input box, and a pane capture renders it in
+the same position as text the orchestrator typed — the only difference is the
+SGR dim code (`ESC[2m`). An orchestrator reading a snapshot cannot tell "a
+suggestion the UI drew" from "input I sent that was never submitted", so it is
+turned off rather than parsed around.
+
+These are user-level settings, deliberately not a `.claude/settings.json` in
+this repo: project settings are resolved from the session's working directory,
+and sub-agent sessions are launched with `-c $HOME`, so a repo-local file would
+never be read.
 
 The step is idempotent and merges into the existing files rather than replacing
 them. It runs *after* the credential copy, which overwrites both. It sets the
